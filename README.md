@@ -1,469 +1,343 @@
-# 闲鱼自动回复系统
+# 闲鱼自动回复管理系统｜安全人工审核定制版
 
-基于 FastAPI + React + MySQL + Redis + Playwright 的闲鱼多账号自动化系统。
+这是基于开源项目 [zhinianboke/xianyu-auto-reply](https://github.com/zhinianboke/xianyu-auto-reply) 二次开发的定制版本。
 
-主系统负责账号管理、消息收发、自动回复、自动发货、商品发布与后台管理；`promotion` 子项目负责返佣账号、选品规则、素材库、发布规则、删除规则和相关修复任务。
+本版本重点不是让 AI 不受控制地代替卖家操作，而是在保留账号管理、在线聊天和原有自动化能力的基础上，增加一套可配置、可审核、可拒绝的 **AI 建议工作流**，并强化本地开发和敏感信息保护。
 
-## 🔴 说明
+> 本仓库不是上游项目的官方版本。上游功能、部署方式和平台接口可能继续变化，本版本的定制功能以当前仓库代码和本文档为准。
 
-> **🔴 诚邀各位开发者提交pr，完善系统**
->
-> **🔴 承接各类项目定制，各类项目均可，有需要可联系，另外我菜，不一定都会**
+## 当前版本重点
 
-## 🔴 最新源码地址(建议转存)
+### 1. 三种回复模式
 
-> 🔴 我用夸克网盘给你分享了「自动发货」，点击链接或复制整段内容，打开「夸克网盘APP」即可获取。
-> 
-> 🔴 /~79313YhCQU~:/
-> 
-> 🔴 **链接：https://pan.quark.cn/s/af567356cba7**
+每个闲鱼账号可以单独选择：
 
-## 交流群
-
-| 微信群 | QQ群 | 微信公众号 | Telegram | 赞赏支持 |
-|:---:|:---:|:---:|:---:|:---:|
-| ![微信群](https://xy.zhinianboke.com/static/qrcode/wechat-group.jpg) | ![QQ群](https://xy.zhinianboke.com/static/qrcode/qq-group.jpg) | ![微信公众号](https://xy.zhinianboke.com/static/qrcode/wechat-official-group.jpg) | ![Telegram](https://xy.zhinianboke.com/static/qrcode/telegram-group.png) | ![赞赏支持](https://xy.zhinianboke.com/static/qrcode/reward-group.png) |
-| 扫码加入微信交流群 | 扫码加入QQ交流群 | 关注公众号发送"最新源码"获取最新代码 | 扫码加入Telegram群 | 如果觉得好用，请作者喝杯咖啡 |
-
-如群二维码过期，请关注公众号获取最新群链接。
-
----
-
-## 功能概览
-
-### 主系统
-
-| 模块 | 说明 |
+| 模式 | 行为 |
 |------|------|
-| 多账号管理 | 支持多个闲鱼账号登录、状态切换、Cookie 维护与登录续期 |
-| 自动回复 | 支持文本关键词、图片关键词、默认回复、商品专属回复 |
-| AI 回复 | 支持大模型上下文对话与智能回复 |
-| 自动发货 | 支持卡券、虚拟商品、自动补发、发送结果记录 |
-| 在线聊天 | 支持会话列表、消息收发、聊天联动 |
-| 商品发布 | 支持素材库、地址库、单品发布、批量发布、发布日志 |
-| 订单与评价 | 订单拉取、自动评价、求小红花、状态跟踪 |
-| 商品采集与分销 | Goofish 采集、货源管理、对接记录、结算链路 |
-| 通知与风控 | 支持消息通知、风控日志、系统反馈与公告管理 |
+| 手动模式 | 完全由人工查看并回复，不调用 AI |
+| AI 建议模式 | 买家消息先由人工审核是否可以发送给 AI；AI 只生成建议，不直接发送给买家 |
+| AI 自动模式 | 保留原项目自动回复能力，风险较高，默认不建议开启 |
 
-### 返佣子系统
+AI 建议模式是本定制版本的主要工作方式。
 
-| 模块 | 说明 |
-|------|------|
-| 返佣账号 | 返佣账号登录、状态管理、Cookie 维护 |
-| 选品规则 | 按规则抓取候选商品并自动写入素材库 |
-| 素材库 | 管理标题、图片、详情、淘口令、短链、库存、发布状态 |
-| 发布规则 | 定时发布返佣商品，复用公共发布能力 |
-| 删除规则 | 定时删除已发布商品 |
-| 补偿任务 | 已发布商品 ID 回写、短链修复、卡券补偿等 |
+### 2. 发送给 AI 之前先人工审核
 
-## 技术栈
+买家发来的连续消息会合并成一组，并在会话中用一个整体边框显示。消息组下方提供：
 
-### 后端与自动化
+- 倒计时进度条：默认约 4 秒，可在全局或账号设置中调整；
+- `✓`：立即批准这一组消息发送给 AI；
+- `×`：拒绝发送，这一组原文不会进入 AI 上下文；
+- `○`：先修改副本，再将修改后的内容发送给 AI。
 
-| 技术 | 说明 |
-|------|------|
-| FastAPI | 主系统与返佣后端 API 服务 |
-| SQLAlchemy 2.0 | ORM 与数据库访问 |
-| MySQL 8.0 | 主数据存储 |
-| Redis 7 | 缓存、会话与任务辅助 |
-| Playwright | 登录、Cookie 刷新、发布等浏览器自动化 |
-| APScheduler | 定时任务调度 |
-| Loguru | 日志管理 |
+只有用户打开对应会话时倒计时才会运行；离开后暂停，再次进入会话时重新计时。
 
-### 前端
+倒计时结束表示“把已审核消息提交给 AI”，不是把回复自动发送给买家。
 
-| 技术 | 说明 |
-|------|------|
-| React 18 + TypeScript | 主系统与返佣前端 |
-| Vite | 开发与构建 |
-| TailwindCSS | 主系统 UI 样式 |
-| Zustand | 状态管理 |
-| Lucide React | 图标体系 |
+### 3. AI 建议仍需人工决定
 
-### 部署
+AI 生成结果后只显示为建议卡片，用户可以：
 
-| 技术 | 说明 |
-|------|------|
-| Docker / Docker Compose | 容器化部署 |
-| Nginx | 前端静态资源与反向代理 |
+- 直接发送建议；
+- 修改后发送；
+- 忽略建议；
+- 填写补充要求后重新生成。
 
-## 系统要求
+系统不会因为 AI 已经生成文字就自动发送真实闲鱼消息。
 
-### 开发环境
+### 4. 本机敏感信息检查
 
-- Python 3.11+
-- Node.js 18+
-- MySQL 8.0+
-- Redis 6+
-- Chromium / Chrome（Playwright 相关功能）
+消息正式提交给 AI 之前，后端会在本机检查常见敏感内容，包括：
 
-### 生产环境
+- 密码、口令；
+- Cookie；
+- Token、Authorization；
+- API Key、Secret；
+- 验证码、动态码。
 
-- Docker 20.10+
-- Docker Compose 2.0+
-- 最低 2 核 CPU / 4GB 内存
-- 推荐 4 核 CPU / 8GB 内存
+命中后只返回风险类型和消息位置，不把命中的原文写进错误信息。用户可以拒绝发送，或修改副本后重新提交。
+
+这套检查用于降低误传风险，但不能保证识别所有敏感内容。发送前仍应由用户人工确认。
+
+### 5. AI 全局配置与账号局部配置
+
+管理员可以设置全局默认配置，每个闲鱼账号也可以覆盖：
+
+- 工作模式；
+- AI 连接配置；
+- 消息审核倒计时；
+- 回复语气、称呼、长度、表情；
+- 自定义提示词。
+
+当前支持：
+
+- DeepSeek 原生接口；
+- OpenAI 兼容接口，可用于支持 `/chat/completions` 的中转站或其他服务。
+
+API Key 加密保存，管理页面只显示是否已经配置，不回显完整密钥。
+
+### 6. 更专业的商品问答
+
+生成建议前，系统会从本地商品目录匹配当前会话对应的商品：
+
+1. 优先按商品 ID 精确匹配；
+2. 缺少商品 ID 时按商品标题匹配；
+3. 匹配成功后，将公开的商品标题、描述和价格作为本次 AI 上下文；
+4. 匹配不到时只使用会话已有标题，不猜测商品资料。
+
+专业提示词要求模型使用自身知识解释问题，同时禁止编造商品规格、兼容性、库存、优惠、订单状态、售后政策和发货承诺。
+
+### 7. 当前会话导出 Markdown
+
+在“在线聊天”中打开一个买家会话后，可以点击右上角的 **导出 Markdown**：
+
+- 只导出当前打开的单个买家会话；
+- 自动继续读取更早的聊天分页；
+- 按时间顺序输出文字和图片链接；
+- 文件由浏览器在本机生成，不上传到额外的导出服务。
+
+导出内容可能包含买卖双方主动发送的信息，请作为私人资料保管，不要提交到 Git。
+
+### 8. 每个账号独立的人工滑块模式
+
+账号编辑页面提供“人工滑块验证模式”开关：
+
+- 每个账号独立开启或关闭；
+- 开启后使用可见浏览器等待用户亲自完成官方验证；
+- 人工模式不自动移动鼠标、不自动拖动滑块；
+- 只有检测到官方页面真正放行后才算成功；
+- 关闭后恢复原项目原有验证码流程。
+
+该模式不能保证平台一定放行内置 Chromium，也不能用于绕过平台风控。
+
+## 仍然保留的原项目能力
+
+仓库仍包含原项目的大部分模块，例如：
+
+- 多账号管理和 Cookie 维护；
+- 在线聊天和消息收发；
+- 关键词、图片和默认回复；
+- 商品、订单、卡券和自动发货；
+- 商品发布、采集、监控和分销；
+- 定时任务、通知、日志和后台管理；
+- `promotion` 返佣子系统。
+
+其中部分功能会连接真实闲鱼账号、发送消息、操作订单或执行自动发货。没有充分测试前，请保持关闭。
+
+## 安全边界
+
+以下内容不应该提交到 Git：
+
+- 各服务真实 `.env`；
+- 闲鱼 Cookie、Token、账号密码；
+- AI API Key 和中转站密钥；
+- MySQL、Redis 数据和 Docker 数据卷；
+- 浏览器用户目录、缓存和登录状态；
+- 日志、聊天导出文件和本地备份。
+
+项目 `.gitignore` 已覆盖上述常见路径，但提交前仍应检查：
+
+```powershell
+git status --short
+git diff --cached
+```
+
+即使仓库是私有仓库，也不要提交真实凭据。如果密钥曾经意外提交，应立即在对应平台撤销并重新生成，单纯删除最新文件并不能清除 Git 历史。
+
+## 本地开发环境
+
+当前定制版推荐以下源码开发方式：
+
+| 组件 | 运行方式 | 默认端口 |
+|------|----------|----------|
+| MySQL | Docker | 3306 |
+| Redis | Docker | 6379 |
+| Frontend | `npm run dev` | 9000 |
+| Backend-Web | Python 虚拟环境 | 8089 |
+| WebSocket | Python 虚拟环境 | 8090 |
+| Scheduler | Python 虚拟环境 | 8091 |
+
+### 环境要求
+
+- Windows 10/11；
+- WSL2 和 Ubuntu；
+- Docker Desktop 与 Docker Compose；
+- Git；
+- Python 3.11+；
+- Node.js 18+ 和 npm。
+
+### 下载项目
+
+```powershell
+git clone <你的仓库地址>
+cd xianyu-auto-reply-custom
+git switch feature/custom-version
+```
+
+### 配置本地服务
+
+三个 Python 服务分别使用自己的 `.env` 和虚拟环境：
+
+```text
+backend-web/.env
+websocket/.env
+scheduler/.env
+```
+
+真实配置文件来自对应 `.env.example`，不得提交到 Git。
+
+前端依赖安装：
+
+```powershell
+Set-Location frontend
+npm install
+```
+
+Python 服务依赖分别安装到：
+
+```text
+backend-web/.venv
+websocket/.venv
+scheduler/.venv
+```
+
+## 一键启动开发环境
+
+在项目根目录执行：
+
+```powershell
+.\start-dev.ps1
+```
+
+启动脚本会：
+
+1. 使用 `docker-compose.dev.yml` 启动 MySQL 和 Redis；
+2. 等待 MySQL 健康；
+3. 启动三个 Python 服务和 Vite 前端；
+4. 强制设置 `AUTO_START_WEBSOCKET=false`，避免启动时自动连接闲鱼；
+5. 将数据库内已启用的定时任务关闭。
+
+启动后访问：
+
+- 前端：[http://localhost:9000](http://localhost:9000)
+- Backend 健康检查：[http://127.0.0.1:8089/health](http://127.0.0.1:8089/health)
+- WebSocket 健康检查：[http://127.0.0.1:8090/health](http://127.0.0.1:8090/health)
+- Scheduler 健康检查：[http://127.0.0.1:8091/health](http://127.0.0.1:8091/health)
+
+停止开发环境：
+
+```powershell
+.\stop-dev.ps1
+```
+
+停止脚本会保留 MySQL、Redis 和 Docker 数据卷。
+
+禁止使用下面的命令，除非你明确知道数据会被永久删除：
+
+```powershell
+docker compose down -v
+```
+
+## AI 建议配置流程
+
+1. 使用管理员账号进入“AI 建议设置”；
+2. 新建 DeepSeek 或 OpenAI 兼容连接；
+3. 填写 Base URL、模型名称和 API Key；
+4. 点击连接测试；
+5. 设置全局默认审核时间和回复风格；
+6. 打开“在线聊天”，选择账号；
+7. 在聊天区顶部打开账号 AI 设置；
+8. 将工作模式设为“AI 建议模式”；
+9. 选择继承全局配置或指定账号专用连接；
+10. 保存后，再由用户手动连接对应闲鱼账号。
+
+不要使用真实敏感消息做首次测试。建议先用不涉及账号、密码、订单或发货的普通咨询验证流程。
 
 ## 项目结构
 
 ```text
-xianyu-auto-reply/
-├── backend-web/          # 主 Web API 服务（端口 8089）
-├── websocket/            # 闲鱼连接与消息处理服务（端口 8090）
-├── scheduler/            # 定时任务服务（端口 8091）
-├── common/               # 主系统与返佣系统共享模块
-├── frontend/             # 主系统前端（端口 9000）
-├── launcher/             # Windows 桌面启动器（Nuitka 打包为 EXE）
-├── promotion/
-│   ├── backend/          # 返佣后端（端口 8092）
-│   └── frontend/         # 返佣前端（端口 9001）
-├── scripts/              # CI/CD 与工具脚本
-├── docker/frontend/      # 前端 Dockerfile 与 Nginx 配置
-├── docker-compose.yml    # 本地源码构建编排
-├── deploy.sh             # 一键部署脚本（自动生成远程镜像版 compose）
-├── deploy_remote.sh      # 远程 MySQL/Redis 一键部署脚本（自动生成 docker-compose.remote.yml）
-├── update.sh             # 一键更新脚本（拉取最新远程镜像）
-├── build.sh              # 本地源码全量构建脚本
-├── build_frontend.sh     # 单独构建并重启 Frontend
-├── build_backend_web.sh  # 单独构建并重启 Backend-Web
-├── build_websocket.sh    # 单独构建并重启 WebSocket
-├── build_scheduler.sh    # 单独构建并重启 Scheduler
-├── EXE打包构建.bat       # Windows 桌面启动器打包脚本
-├── 离线依赖打包.bat      # Windows 离线依赖打包脚本
+xianyu-auto-reply-custom/
+├── frontend/             # React 前端
+├── backend-web/          # 主业务 API 与 AI 建议服务
+├── websocket/            # 闲鱼实时连接与消息处理
+├── scheduler/            # 定时任务
+├── common/               # 共享模型、数据库和公共服务
+├── promotion/            # 原项目返佣子系统
+├── docs/                 # 定制功能说明
+├── docker-compose.dev.yml
+├── start-dev.ps1
+├── stop-dev.ps1
 └── README.md
 ```
 
-### 服务职责
+## 开发验证
 
-| 服务 | 默认端口 | 说明 |
-|------|----------|------|
-| `frontend` | 9000 | 主系统前端 |
-| `backend-web` | 8089 | 主系统 API 网关、业务接口 |
-| `websocket` | 8090 | 闲鱼 WebSocket、消息收发、登录与订单联动 |
-| `scheduler` | 8091 | 定时任务执行器 |
-| `promotion/backend` | 8092 | 返佣后端 API |
-| `promotion/frontend` | 9001 | 返佣前端 |
+前端构建：
 
-### 架构说明
-
-- 主系统采用多服务拆分：
-  - `frontend` 负责界面与交互
-  - `backend-web` 负责大部分业务 API
-  - `websocket` 负责闲鱼实时连接、扫码登录、消息处理
-  - `scheduler` 负责自动发货、评价、订单拉取、Cookie 刷新等定时任务
-  - `common` 提供模型、数据库、自检、公共服务与工具
-- 返佣子系统位于 `promotion/` 目录，前后端独立，当前不在根目录 Docker Compose 编排内
-- 主系统三个后端服务都提供 `/health` 健康检查接口
-- Docker 依赖链：mysql/redis → backend-web → websocket → scheduler；frontend → backend-web
-
-## 快速开始
-
-### 方式一：服务器一键部署（推荐）
-
-服务器已安装 Docker 与 Docker Compose 后，直接执行一键部署脚本即可：
-
-```bash
-curl -fsSL https://xy-update.zhinianboke.com/deploy.sh | sed 's/\r$//' | bash
+```powershell
+Set-Location frontend
+npm run build
 ```
 
-该脚本会自动完成部署所需的配置生成、镜像拉取、旧容器清理与服务启动。
+Python 静态编译检查：
 
-更新版本，直接执行一键更新脚本即可：
-
-```bash
-curl -fsSL https://xy-update.zhinianboke.com/update.sh | sed 's/\r$//' | bash
+```powershell
+Set-Location ..
+python -m compileall -q common backend-web websocket scheduler
 ```
 
-### 方式二：克隆仓库部署
+本版本开发过程中已验证前端构建、Python 编译、FastAPI 路由和四个本地健康地址。为保护真实账号，没有由开发助手自动执行真实 AI 调用、闲鱼消息发送、自动发货或订单操作。
 
-```bash
-git clone https://github.com/zhinianboke/xianyu-auto-reply.git
-cd xianyu-auto-reply
-bash deploy.sh
-```
+## 详细文档
 
-- 首次运行会自动生成 `.env` 配置文件和 `docker-compose.deploy.yml`
-- 从阿里云镜像仓库拉取预构建镜像并启动
-- 如果检测到加密版容器会自动清理（保留数据卷）
-- 部署完成后默认访问地址：
-  - 前端：`http://服务器IP:9000`
-  - API 文档：`http://服务器IP:8089/docs`
-  - 默认账号：`admin` / `admin123`
-
-后续更新：
-
-```bash
-bash update.sh
-```
-
-### 方式三：使用远程 MySQL / Redis 部署
-
-当 MySQL 和 Redis 由外部（如云数据库 RDS、独立服务器或已有实例）提供时，可使用 `deploy_remote.sh`。
-该脚本**不内置 mysql/redis 容器**，仅拉取并启动 4 个应用服务（frontend / backend-web / websocket / scheduler），
-数据库连接信息通过 `.env.remote` 配置。与方式一相同，直接远程拉取脚本执行即可：
-
-```bash
-# 1) 首次运行：自动生成 .env.remote 后退出，提示填写远程连接信息
-curl -fsSL https://xy-update.zhinianboke.com/deploy_remote.sh | sed 's/\r$//' | bash
-
-# 2) 编辑 .env.remote，填写真实的远程地址（勿填 localhost）
-#    MYSQL_HOST / REDIS_HOST 等
-vim .env.remote
-
-# 3) 再次运行：校验配置 → 自动生成 docker-compose.remote.yml → 拉取镜像 → 启动
-curl -fsSL https://xy-update.zhinianboke.com/deploy_remote.sh | sed 's/\r$//' | bash
-```
-
-> 已克隆仓库的也可改用本地脚本：`bash deploy_remote.sh`（首次生成配置后退出，填好 `.env.remote` 再次执行）。
-
-- 首次运行自动生成 `.env.remote`，每次运行自动生成 `docker-compose.remote.yml`，均不影响根目录原有的 `.env` / `docker-compose.yml` / `docker-compose.deploy.yml`
-- 容器名与主套保持一致（`xianyu-backend-web` / `xianyu-websocket` / `xianyu-scheduler` / `xianyu-frontend`），与方式二/方式四属于同一套部署，二者只需选其一，不要同时启动
-- 远程 MySQL 需提前创建好数据库（默认 `xianyu_data`）并授权部署机 IP 远程访问，应用启动时会自动建表与补齐字段
-- 若远程库/缓存就在宿主机上，请使用 `host.docker.internal` 或宿主机内网 IP，**不要填 `localhost` / `127.0.0.1`**
-
-### 方式四：本地源码 Docker 构建
-
-```bash
-bash build.sh rebuild
-```
-
-常用命令：
-
-| 命令 | 说明 |
-|------|------|
-| `bash build.sh rebuild` | 删除旧容器与镜像，重新构建并启动 |
-| `bash build.sh start` | 启动服务 |
-| `bash build.sh stop` | 停止服务 |
-| `bash build.sh restart` | 重启服务 |
-| `bash build.sh logs` | 查看实时日志 |
-| `bash build.sh status` | 查看服务状态 |
-
-单独重建某个服务（不影响其他服务）：
-
-```bash
-bash build_frontend.sh      # 重建前端
-bash build_backend_web.sh   # 重建 Backend-Web
-bash build_websocket.sh     # 重建 WebSocket
-bash build_scheduler.sh     # 重建 Scheduler
-```
-
-### 方式五：源码本地开发
-
-#### 1. 准备基础服务
-
-可以使用本机 MySQL / Redis，也可以仅用 Docker 启动基础设施：
-
-```bash
-docker compose up -d mysql redis
-```
-
-#### 2. 创建服务配置
-
-主系统常用 `.env` 配置示例：
-
-```env
-ENVIRONMENT=development
-MYSQL_HOST=127.0.0.1
-MYSQL_PORT=3306
-MYSQL_USER=root
-MYSQL_PASSWORD=root
-MYSQL_DATABASE=xianyu_data
-REDIS_HOST=127.0.0.1
-REDIS_PORT=6379
-REDIS_PASSWORD=
-REDIS_DB=0
-CORS_ORIGINS=*
-BACKEND_WEB_PORT=8089
-WEBSOCKET_PORT=8090
-SCHEDULER_PORT=8091
-WEBSOCKET_SERVICE_URL=http://127.0.0.1:8090
-SCHEDULER_SERVICE_URL=http://127.0.0.1:8091
-BACKEND_WEB_SERVICE_URL=http://127.0.0.1:8089
-STATIC_DIR=static
-TZ=Asia/Shanghai
-```
-
-#### 3. 启动主系统后端
-
-```bash
-# Backend-Web 服务
-cd backend-web
-python -m venv .venv
-# Windows: .venv\Scripts\activate
-# Linux/macOS: source .venv/bin/activate
-pip install -e .
-python -m playwright install chromium
-python main.py
-```
-
-```bash
-# WebSocket 服务
-cd websocket
-python -m venv .venv
-# Windows: .venv\Scripts\activate
-# Linux/macOS: source .venv/bin/activate
-pip install -e .
-python -m playwright install chromium
-python main.py
-```
-
-```bash
-# Scheduler 服务
-cd scheduler
-python -m venv .venv
-# Windows: .venv\Scripts\activate
-# Linux/macOS: source .venv/bin/activate
-pip install -e .
-python -m playwright install chromium
-python main.py
-```
-
-#### 4. 启动前端
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-#### 5. 启动返佣子系统
-
-```bash
-# 返佣后端
-cd promotion/backend
-pip install -e .
-python main.py
-
-# 返佣前端
-cd promotion/frontend
-npm install
-npm run dev
-```
-
-## 配置说明
-
-### 关键环境变量
-
-| 变量 | 说明 |
-|------|------|
-| `MYSQL_HOST` / `MYSQL_PORT` / `MYSQL_USER` / `MYSQL_PASSWORD` / `MYSQL_DATABASE` | MySQL 连接 |
-| `REDIS_HOST` / `REDIS_PORT` / `REDIS_PASSWORD` / `REDIS_DB` | Redis 连接 |
-| `JWT_SECRET_KEY` | JWT 密钥，由数据库统一托管（首次启动自动生成并持久化），无需手动配置 |
-| `BACKEND_WEB_PORT` / `WEBSOCKET_PORT` / `SCHEDULER_PORT` | 各服务端口 |
-| `WEBSOCKET_SERVICE_URL` / `SCHEDULER_SERVICE_URL` / `BACKEND_WEB_SERVICE_URL` | 服务间调用地址 |
-| `BACKEND_WEB_PUBLIC_URL` | 对外访问地址，用于生成文件 URL |
-| `CORS_ORIGINS` | CORS 白名单 |
-| `BROWSER_HEADLESS` | Playwright 是否无头运行 |
-
-### 数据库与初始化
-
-- 主系统启动时自动建表、自检、缺失字段补齐、默认数据初始化
-- 默认管理员：`admin` / `admin123`
-- 返佣系统启动时执行独立的数据库自检
-- 返佣系统表统一使用 `fy_` 前缀
-- 不依赖外键约束，关系由代码维护
-- 所有时间统一使用北京时间（`Asia/Shanghai`）
-
-### 统一响应格式
-
-后端采用统一响应包装，业务异常也返回 HTTP 200：
-
-```json
-{
-  "success": true,
-  "code": 200,
-  "message": "操作成功",
-  "data": {}
-}
-```
-
-## 构建脚本速查
-
-| 脚本 | 平台 | 作用 |
-|------|------|------|
-| `deploy.sh` | Linux | 生成远程镜像版 compose 并拉取镜像启动（首次部署） |
-| `deploy_remote.sh` | Linux | 使用远程 MySQL/Redis 部署，生成 `docker-compose.remote.yml` 与 `.env.remote` 并启动应用服务 |
-| `update.sh` | Linux | 拉取最新远程镜像并重建应用容器（后续更新） |
-| `build.sh` | Linux | 从源码全量构建所有 Docker 镜像并启动 |
-| `build_frontend.sh` | Linux | 单独重建并重启 Frontend 服务 |
-| `build_backend_web.sh` | Linux | 单独重建并重启 Backend-Web 服务 |
-| `build_websocket.sh` | Linux | 单独重建并重启 WebSocket 服务 |
-| `build_scheduler.sh` | Linux | 单独重建并重启 Scheduler 服务 |
-| `EXE打包构建.bat` | Windows | 使用 Nuitka 打包桌面启动器 EXE |
-| `离线依赖打包.bat` | Windows | 打包所有 Python 依赖供离线安装 |
-| `scripts/Pipeline脚本-xianyu-auto-reply.groovy` | Jenkins | CI/CD 流水线，构建多架构镜像并推送到阿里云 ACR |
-
-## 安全说明
-
-- **JWT 认证**：主系统与返佣系统都使用 JWT 做登录态控制
-- **密码存储**：密码使用哈希方式保存
-- **SQL 注入防护**：数据库访问使用参数化查询
-- **XSS 防护**：前端输入与展示做好校验与转义
-- **CORS 控制**：生产环境应限制到明确域名
-
-### 生产环境建议
-
-1. 立即修改默认管理员密码
-2. JWT 密钥由数据库统一托管，首次启动自动生成强随机密钥（无需手动设置）
-3. 设置正确的 `BACKEND_WEB_PUBLIC_URL` 与反向代理地址
-4. 为外网入口配置 HTTPS
-5. 定期备份 MySQL 与静态资源目录
-6. 确保 Playwright 浏览器已正确安装
+- [AI 建议模式](docs/AI_SUGGESTION_MODE.md)
+- [当前会话导出与商品上下文](docs/CHAT_MARKDOWN_AND_PRODUCT_CONTEXT.md)
+- [人工滑块验证模式](docs/MANUAL_CAPTCHA_MODE.md)
+- [Codex 新会话项目说明](CODEX_PROJECT_CONTEXT.md)
 
 ## 常见问题
 
-### 根目录 Docker Compose 没有启动返佣系统？
+### Docker Desktop 明明打开了，脚本仍提示无权限
 
-当前 `docker-compose.yml` 只覆盖主系统。返佣系统需要单独启动。
+确认 Docker Desktop 左下角显示 `Engine running`。如果终端是在 Docker 启动前打开的，可以关闭终端后重新打开，再执行启动脚本。
 
-### 登录或发布时报浏览器缺失？
+### 滑块一直验证失败
 
-在对应 Python 环境执行：`python -m playwright install chromium`。Docker 环境依赖各服务 Dockerfile 内已安装的浏览器。
+在“账号管理 → 编辑 → 自动登录设置”中为该账号开启“人工滑块验证模式”，然后在可见浏览器中亲自完成官方验证。不要频繁重试或尝试绕过平台验证。
 
-### Docker 部署端口冲突？
+### AI 建议没有生成
 
-修改根目录 `.env` 中的端口配置后重新部署。
+依次检查：
 
-### 执行脚本报 `/bin/bash^M: 坏的解释器`？
+1. 当前账号是否处于“AI 建议模式”；
+2. 是否存在启用的 AI 连接配置；
+3. API Key、Base URL 和模型名称是否正确；
+4. 消息是否被本机敏感信息检查拦截；
+5. Backend-Web 是否健康。
 
-脚本文件包含 Windows 换行符（CRLF），Linux 无法识别。解决方法：
+### Markdown 导出没有更早的聊天记录
 
-```bash
-# 方法一：用 sed 去除 \r 后执行
-sed -i 's/\r$//' deploy.sh
-bash deploy.sh
+完整历史需要当前闲鱼账号处于连接状态。如果 IM 服务临时限流，页面会停止导出并提示稍后重试，不会把不完整文件伪装成完整导出。
 
-# 方法二：通过管道执行（推荐远程脚本使用）
-curl -fsSL https://xy-update.zhinianboke.com/deploy.sh | sed 's/\r$//' | bash
-```
+### 如何确认没有自动运行任务
 
-## 许可证
+除了检查账号连接状态，还应确认“定时任务”页面没有启用任务。开发启动脚本会尝试关闭任务，但不能代替人工检查。
 
-本项目采用 [GNU Affero General Public License v3.0 (AGPL-3.0)](LICENSE) 开源协议。
+## 上游项目与许可证
 
-**⚠️ 禁止商业用途：本项目仅供学习研究使用，严禁任何形式的商业用途。**
+本项目基于：
+
+- [zhinianboke/xianyu-auto-reply](https://github.com/zhinianboke/xianyu-auto-reply)
+
+并参考了上游 README 中列出的其他开源项目。
+
+本仓库继续遵循 [GNU Affero General Public License v3.0](LICENSE)。修改或对外提供网络服务时，请同时遵守 AGPL-3.0 和上游项目的版权声明。
 
 ## 免责声明
 
-本项目仅供技术学习和研究使用，使用者需自行承担使用风险。请遵守相关平台的使用条款和法律法规。
+本项目仅用于学习、研究和在合法授权范围内管理自己的账号。使用者应自行遵守闲鱼平台规则、相关法律法规以及 AI 服务商条款。
 
-- 本项目不对使用本系统造成的任何后果负责
-- 请勿用于违反闲鱼平台规则的行为
-- 请勿用于商业用途
-- 使用本系统可能存在账号风险，请谨慎使用
-
-## 🧸 特别鸣谢
-
-本项目参考了以下开源项目：
-
-- **[XianYuApis](https://github.com/cv-cat/XianYuApis)** - 提供了闲鱼API接口的技术参考
-- **[XianyuAutoAgent](https://github.com/shaxiu/XianyuAutoAgent)** - 提供了自动化处理的实现思路
-- **[myfish](https://github.com/Kaguya233qwq/myfish)** - 提供了扫码登录的实现思路
-
-
-感谢这些优秀的开源项目为本项目的开发提供了宝贵的参考和启发！
-
-
-## Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=zhinianboke/xianyu-auto-reply&type=Date)](https://www.star-history.com/#zhinianboke/xianyu-auto-reply&Date)
+- 不要登录或操作不属于自己的账号；
+- 不要发送欺诈、骚扰或违法消息；
+- 不要绕过验证码、平台风控或访问控制；
+- 不要在未核实的情况下自动发货或修改订单；
+- 自动化和第三方接口可能导致账号限制、数据错误或额外费用，风险由使用者自行承担。
