@@ -410,14 +410,17 @@ class AccountService:
         username: str | None = None,
         login_password: str | None = None,
         show_browser: bool | None = None,
+        captcha_manual_mode: bool | None = None,
     ) -> None:
-        """更新账号登录信息（用户名、密码、是否显示浏览器）"""
+        """更新账号登录信息与该账号的人工验证模式。"""
         if username is not None:
             account.username = username
         if login_password is not None:
             account.login_password = login_password
         if show_browser is not None:
             account.show_browser = show_browser
+        if captcha_manual_mode is not None:
+            account.captcha_manual_mode = captcha_manual_mode
         self.session.add(account)
         await self.session.commit()
 

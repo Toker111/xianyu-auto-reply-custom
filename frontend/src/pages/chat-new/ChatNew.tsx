@@ -5,7 +5,7 @@
  * 支持多账号切换，基于WebSocket API获取数据
  */
 import { useEffect, useState, useRef, useCallback } from 'react'
-import { Loader2, LogIn, LogOut, MessageCircle, RefreshCw, User, ChevronUp, X, Send, AlertCircle, Ban, ImagePlus } from 'lucide-react'
+import { Loader2, LogIn, LogOut, MessageCircle, RefreshCw, User, ChevronUp, X, Send, AlertCircle, Ban, ImagePlus, Check, Circle, Sparkles, Download } from 'lucide-react'
 import { useUIStore } from '@/store/uiStore'
 import {
   getChatAccounts,
@@ -32,11 +32,48 @@ import {
   type QuickPhrase,
 } from '@/api/chatNew'
 import { cancelOrder, fetchXianyuOrders, getOrderDetail, manualDelivery, noLogisticsDelivery, type OrderDetail } from '@/api/orders'
+import { getItems } from '@/api/items'
+import type { Item } from '@/types'
 import { useChatNewWs } from './useChatNewWs'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { CustomerOrdersPanel } from './CustomerOrdersPanel'
 import { QuickPhrasesPanel } from './QuickPhrasesPanel'
 import { OrderDetailModal } from './OrderDetailModal'
+import {
+  generateAISuggestion,
+  getAISuggestionAccountSetting,
+  listAIConnectionProfiles,
+  rejectAIMessageGroup,
+  saveAISuggestionAccountSetting,
+  updateAISuggestionAction,
+  type AIConnectionProfile,
+  type AIBusinessContext,
+  type AIGroupMessage,
+  type AISuggestionAccountSetting,
+} from '@/api/aiSuggestion'
+import { buildConversationMarkdown, downloadMarkdown, mergeChatMessages } from './markdownExport'
+
+interface AIReviewGroup {
+  id: string
+  messages: AIGroupMessage[]
+  remainingMs: number
+  editing: boolean
+  draftMessages?: AIGroupMessage[]
+  generating: boolean
+  blocked: boolean
+  cancelledByManual: boolean
+}
+
+interface AISuggestionCardState {
+  recordId: number
+  groupId: string
+  text: string
+  originalText: string
+  messages: AIGroupMessage[]
+  regenerating: boolean
+  providerName: string
+  modelName: string
+}
 
 /** 检查昵称是否为纯数字（如用户ID），纯数字视为无效昵称 */
 const isPureDigits = (name: string) => /^\d+$/.test(name)
@@ -76,6 +113,9 @@ export function ChatNew() {
   const [msgHasMore, setMsgHasMore] = useState(false)
   const [msgCursor, setMsgCursor] = useState<number | null>(null)
   const msgContainerRef = useRef<HTMLDivElement>(null)
+  const [exportingConversation, setExportingConversation] = useState(false)
+  const itemCatalogCacheRef = useRef<Record<string, Item[]>>({})
+  const itemCatalogPromiseRef = useRef<Record<string, Promise<Item[]>>>({})
 
   // 图片预览
   const [previewImage, setPreviewImage] = useState('')
@@ -114,6 +154,50 @@ export function ChatNew() {
   const [phraseTitle, setPhraseTitle] = useState('')
   const [phraseContent, setPhraseContent] = useState('')
   const [savingPhrase, setSavingPhrase] = useState(false)
+
+  // AI 建议模式状态按“账号 + 会话”保留，切换会话不会丢失待审核组
+  const aiSettingsRef = useRef<Record<string, AISuggestionAccountSetting>>({})
+  const [aiSetting, setAISetting] = useState<AISuggestionAccountSetting | null>(null)
+  const [aiProfiles, setAIProfiles] = useState<AIConnectionProfile[]>([])
+  const [showAIAccountSettings, setShowAIAccountSettings] = useState(false)
+  const [savingAIAccountSettings, setSavingAIAccountSettings] = useState(false)
+  const aiGroupQueuesRef = useRef<Record<string, AIReviewGroup[]>>({})
+  const aiSuggestionCardsRef = useRef<Record<string, AISuggestionCardState>>({})
+  const pendingSellerMessagesRef = useRef<Record<string, AIGroupMessage[]>>({})
+  const [, forceAIRevision] = useState(0)
+
+  const aiConversationKey = (accountId: string, cid: string) => `${accountId}:${cid}`
+
+  const enqueueAIMessage = useCallback((accountId: string, cid: string, msg: ChatMessage) => {
+    if (msg.isSelf || msg.type !== 'text' || !msg.text.trim()) return
+    if (aiSettingsRef.current[accountId]?.mode !== 'suggestion') return
+    const key = aiConversationKey(accountId, cid)
+    const queue = aiGroupQueuesRef.current[key] || []
+    const delay = aiSettingsRef.current[accountId]?.review_delay_ms || 4000
+    const incoming: AIGroupMessage = {
+      role: 'buyer', content: msg.text.trim(), source_message_id: msg.messageId || undefined,
+    }
+    const last = queue[queue.length - 1]
+    if (last && !last.editing && !last.generating && !last.cancelledByManual) {
+      last.messages.push(incoming)
+      last.remainingMs = delay
+      last.blocked = false
+    } else {
+      const pendingSeller = pendingSellerMessagesRef.current[key] || []
+      pendingSellerMessagesRef.current[key] = []
+      queue.push({
+        id: `ai-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+        messages: [...pendingSeller, incoming],
+        remainingMs: delay,
+        editing: false,
+        generating: false,
+        blocked: false,
+        cancelledByManual: false,
+      })
+    }
+    aiGroupQueuesRef.current[key] = queue
+    forceAIRevision((value) => value + 1)
+  }, [])
 
   // 手动管理 WebSocket 连接的账号列表（仅用户显式操作时加入，页面刷新不自动重连）
   const [wsAccountIds, setWsAccountIds] = useState<string[]>([])
@@ -218,7 +302,7 @@ export function ChatNew() {
       cid, rawCid: cid,
       otherUserId: msg.isSelf ? '' : msg.senderId,
       otherUserName: msg.isSelf ? '' : (msg.senderName || ''),
-      otherUserAvatar: '', itemTitle: '',
+      otherUserAvatar: '', itemId: '', itemTitle: '',
       lastMessageSummary: summary, lastMessageTime: msg.time,
       unreadCount: isViewing ? 0 : 1,
     }
@@ -234,6 +318,7 @@ export function ChatNew() {
   }
 
   const handleWsNewMessage = useCallback((accountId: string, cid: string, msg: ChatMessage) => {
+    enqueueAIMessage(accountId, cid, msg)
     const summary = msg.type === 'image' ? '[图片]' : (msg.text || '').slice(0, 50)
     const isActiveAccount = accountId === activeAccountIdRef.current
 
@@ -257,7 +342,7 @@ export function ChatNew() {
         msgCache.msgs = appendMsg(msgCache.msgs, msg)
       }
     }
-  }, [])
+  }, [enqueueAIMessage])
 
   // WebSocket 断连时刷新账号状态（节流：最多每 5 秒刷一次）
   const lastDisconnectRefreshRef = useRef(0)
@@ -591,6 +676,186 @@ export function ChatNew() {
 
   const activeConversation = conversations.find((c) => c.cid === activeCid)
 
+  const resolveBusinessContext = useCallback(async (
+    accountId: string,
+    conversation?: Conversation,
+  ): Promise<AIBusinessContext | undefined> => {
+    if (!accountId || !conversation) return undefined
+    const fallback: AIBusinessContext = conversation.itemTitle
+      ? { item_title: conversation.itemTitle.slice(0, 500) }
+      : {}
+    try {
+      let catalog = itemCatalogCacheRef.current[accountId]
+      if (!catalog) {
+        let pending = itemCatalogPromiseRef.current[accountId]
+        if (!pending) {
+          pending = getItems(accountId).then((result) => result.data || [])
+          itemCatalogPromiseRef.current[accountId] = pending
+        }
+        catalog = await pending
+        itemCatalogCacheRef.current[accountId] = catalog
+        delete itemCatalogPromiseRef.current[accountId]
+      }
+      const normalizedTitle = conversation.itemTitle.trim()
+      const item = catalog.find((candidate) => conversation.itemId && candidate.item_id === conversation.itemId)
+        || catalog.find((candidate) => normalizedTitle && (candidate.item_title || candidate.title || '').trim() === normalizedTitle)
+      if (!item) return Object.keys(fallback).length ? fallback : undefined
+      const title = String(item.item_title || item.title || conversation.itemTitle || '').trim()
+      const description = String(item.item_description || item.item_detail || item.desc || '').trim()
+      const price = String(item.item_price ?? item.price ?? '').trim()
+      const context: AIBusinessContext = {
+        item_title: title ? title.slice(0, 500) : undefined,
+        item_description: description ? description.slice(0, 4000) : undefined,
+        item_price: price ? price.slice(0, 80) : undefined,
+      }
+      return Object.values(context).some(Boolean) ? context : undefined
+    } catch {
+      delete itemCatalogPromiseRef.current[accountId]
+      return Object.keys(fallback).length ? fallback : undefined
+    }
+  }, [])
+
+  const activeAIKey = activeAccountId && activeCid ? aiConversationKey(activeAccountId, activeCid) : ''
+  const activeAIGroup = activeAIKey ? aiGroupQueuesRef.current[activeAIKey]?.[0] : undefined
+  const activeSuggestionCard = activeAIKey ? aiSuggestionCardsRef.current[activeAIKey] : undefined
+
+  useEffect(() => {
+    let cancelled = false
+    setAISetting(null)
+    if (!activeAccountId) return
+    const cached = aiSettingsRef.current[activeAccountId]
+    if (cached) {
+      setAISetting(cached)
+      return
+    }
+    getAISuggestionAccountSetting(activeAccountId)
+      .then((setting) => {
+        if (cancelled) return
+        aiSettingsRef.current[activeAccountId] = setting
+        setAISetting(setting)
+        forceAIRevision((value) => value + 1)
+      })
+      .catch(() => {
+        if (!cancelled) setAISetting(null)
+      })
+    return () => { cancelled = true }
+  }, [activeAccountId])
+
+  const openAIAccountSettings = async () => {
+    setShowAIAccountSettings(true)
+    if (aiProfiles.length === 0) {
+      try {
+        setAIProfiles(await listAIConnectionProfiles())
+      } catch (error: any) {
+        addToast({ message: error?.message || '获取 AI 连接配置失败', type: 'error' })
+      }
+    }
+  }
+
+  const saveAIAccountSettings = async () => {
+    if (!activeAccountId || !aiSetting) return
+    setSavingAIAccountSettings(true)
+    try {
+      const { account_id: _accountId, inherited_profile: _inherited, ...payload } = aiSetting
+      const res = await saveAISuggestionAccountSetting(activeAccountId, payload)
+      if (!res.success || !res.data) throw new Error(res.message || '保存失败')
+      aiSettingsRef.current[activeAccountId] = res.data
+      setAISetting(res.data)
+      setShowAIAccountSettings(false)
+      addToast({ message: '当前账号 AI 模式设置已保存', type: 'success' })
+    } catch (error: any) {
+      addToast({ message: error?.message || '保存失败', type: 'error' })
+    } finally {
+      setSavingAIAccountSettings(false)
+    }
+  }
+
+  // 进入或再次进入会话时，当前等待组从完整审核时间重新开始
+  useEffect(() => {
+    if (!activeAIKey || !aiSetting || aiSetting.mode !== 'suggestion') return
+    const group = aiGroupQueuesRef.current[activeAIKey]?.[0]
+    if (group && !group.editing && !group.generating && !group.cancelledByManual) {
+      group.remainingMs = aiSetting.review_delay_ms
+      forceAIRevision((value) => value + 1)
+    }
+  }, [activeAIKey, aiSetting])
+
+  const submitActiveAIGroup = useCallback(async (overrideMessages?: AIGroupMessage[], instruction?: string) => {
+    if (!activeAccountId || !activeCid || !activeAIKey) return
+    const group = aiGroupQueuesRef.current[activeAIKey]?.[0]
+    if (!group || group.generating) return
+    group.generating = true
+    group.editing = false
+    forceAIRevision((value) => value + 1)
+    const approvedMessages = (overrideMessages || group.messages).map((item) => ({ ...item, content: item.content.trim() })).filter((item) => item.content)
+    try {
+      const businessContext = await resolveBusinessContext(activeAccountId, activeConversation)
+      const res = await generateAISuggestion(
+        activeAccountId, activeCid, group.id, approvedMessages,
+        businessContext, instruction,
+      )
+      if (!res.success || !res.data?.suggestion) {
+        if (res.data?.blocked) {
+          group.generating = false
+          group.blocked = true
+          group.editing = true
+          group.draftMessages = approvedMessages.map((item) => ({ ...item }))
+          addToast({ message: res.message || '检测到敏感信息，请编辑后再提交', type: 'error' })
+          forceAIRevision((value) => value + 1)
+          return
+        }
+        aiGroupQueuesRef.current[activeAIKey].shift()
+        addToast({ message: res.message || 'AI 建议生成失败，请人工回复', type: 'error' })
+        forceAIRevision((value) => value + 1)
+        return
+      }
+      aiGroupQueuesRef.current[activeAIKey].shift()
+      aiSuggestionCardsRef.current[activeAIKey] = {
+        recordId: res.data.record_id,
+        groupId: group.id,
+        text: res.data.suggestion,
+        originalText: res.data.suggestion,
+        messages: approvedMessages,
+        regenerating: false,
+        providerName: res.data.provider_name,
+        modelName: res.data.model_name,
+      }
+      forceAIRevision((value) => value + 1)
+    } catch (error: any) {
+      group.generating = false
+      addToast({ message: error?.message || 'AI 建议生成失败，请人工回复', type: 'error' })
+      forceAIRevision((value) => value + 1)
+    }
+  }, [activeAccountId, activeCid, activeAIKey, activeConversation, addToast, resolveBusinessContext])
+
+  const rejectActiveAIGroup = useCallback(async () => {
+    if (!activeAccountId || !activeCid || !activeAIKey) return
+    const group = aiGroupQueuesRef.current[activeAIKey]?.[0]
+    if (!group) return
+    aiGroupQueuesRef.current[activeAIKey].shift()
+    forceAIRevision((value) => value + 1)
+    try {
+      await rejectAIMessageGroup(activeAccountId, activeCid, group.id)
+    } catch {
+      addToast({ message: '本地已拒绝该组；服务器占位记录失败', type: 'warning' })
+    }
+  }, [activeAccountId, activeCid, activeAIKey, addToast])
+
+  // 只有当前打开的会话倒计时；切到后台后此 interval 会被清理，相当于暂停
+  useEffect(() => {
+    if (!activeAIKey || aiSetting?.mode !== 'suggestion') return
+    const timer = window.setInterval(() => {
+      const group = aiGroupQueuesRef.current[activeAIKey]?.[0]
+      if (!group || group.editing || group.generating || group.cancelledByManual) return
+      group.remainingMs = Math.max(0, group.remainingMs - 100)
+      if (group.remainingMs === 0) {
+        void submitActiveAIGroup()
+      }
+      forceAIRevision((value) => value + 1)
+    }, 100)
+    return () => window.clearInterval(timer)
+  }, [activeAIKey, aiSetting?.mode, submitActiveAIGroup])
+
   useEffect(() => {
     let cancelled = false
     setIsOfficiallyBlocked(false)
@@ -813,14 +1078,14 @@ export function ChatNew() {
   }, [messages])
 
   // ==================== 发送消息 ====================
-  const sendMessageText = async (rawText: string, clearInput = false) => {
-    if (!rawText.trim() || !activeAccountId || !activeCid || sending) return
+  const sendMessageText = async (rawText: string, clearInput = false, source: 'manual' | 'ai' = 'manual') => {
+    if (!rawText.trim() || !activeAccountId || !activeCid || sending) return false
 
     // 获取当前会话的对方用户ID
     const conv = conversations.find((c) => c.cid === activeCid)
     if (!conv) {
       addToast({ message: '未找到当前会话信息', type: 'error' })
-      return
+      return false
     }
 
     const text = rawText.trim()
@@ -852,9 +1117,26 @@ export function ChatNew() {
               : c,
           ),
         )
+        if (source === 'manual') {
+          const key = aiConversationKey(activeAccountId, activeCid)
+          const currentGroup = aiGroupQueuesRef.current[key]?.[0]
+          const sellerMessage: AIGroupMessage = {
+            role: 'seller', content: text, source_message_id: res.data?.messageId || undefined,
+          }
+          if (currentGroup && !currentGroup.generating) {
+            currentGroup.messages.push(sellerMessage)
+            currentGroup.cancelledByManual = true
+            currentGroup.remainingMs = 0
+            addToast({ message: '你已人工回复，本组已停止自动发送给 AI；仍可手动生成建议', type: 'info' })
+          } else {
+            pendingSellerMessagesRef.current[key] = [...(pendingSellerMessagesRef.current[key] || []), sellerMessage]
+          }
+          forceAIRevision((value) => value + 1)
+        }
       } else {
         addToast({ message: res.message || '发送失败', type: 'error' })
       }
+      return res.success
     } catch (e: any) {
       // 网络等异常：同样以失败态展示该条消息
       const failReason = e?.message || '发送失败'
@@ -873,8 +1155,70 @@ export function ChatNew() {
       if (clearInput) setInputText('')
       setMessages((prev) => [...prev, sentMsg])
       addToast({ message: failReason, type: 'error' })
+      return false
     } finally {
       setSending(false)
+    }
+  }
+
+  const sendActiveSuggestion = async () => {
+    if (!activeAIKey) return
+    const card = aiSuggestionCardsRef.current[activeAIKey]
+    if (!card || !card.text.trim()) return
+    const finalText = card.text.trim()
+    const sent = await sendMessageText(finalText, false, 'ai')
+    if (!sent) return
+    delete aiSuggestionCardsRef.current[activeAIKey]
+    forceAIRevision((value) => value + 1)
+    try {
+      await updateAISuggestionAction(
+        card.recordId,
+        finalText === card.originalText ? 'sent' : 'edited_sent',
+        finalText,
+      )
+    } catch {
+      addToast({ message: '消息已发送，但 AI 建议记录状态同步失败', type: 'warning' })
+    }
+  }
+
+  const ignoreActiveSuggestion = async () => {
+    if (!activeAIKey) return
+    const card = aiSuggestionCardsRef.current[activeAIKey]
+    if (!card) return
+    delete aiSuggestionCardsRef.current[activeAIKey]
+    forceAIRevision((value) => value + 1)
+    try {
+      await updateAISuggestionAction(card.recordId, 'ignored')
+    } catch {
+      addToast({ message: '建议已在本机忽略，服务器记录状态同步失败', type: 'warning' })
+    }
+  }
+
+  const regenerateActiveSuggestion = async () => {
+    if (!activeAIKey || !activeAccountId || !activeCid) return
+    const card = aiSuggestionCardsRef.current[activeAIKey]
+    if (!card || card.regenerating) return
+    const instruction = window.prompt('可填写本次重新生成要求（可以留空）：', '') ?? undefined
+    card.regenerating = true
+    forceAIRevision((value) => value + 1)
+    try {
+      const businessContext = await resolveBusinessContext(activeAccountId, activeConversation)
+      const res = await generateAISuggestion(
+        activeAccountId, activeCid, card.groupId, card.messages,
+        businessContext, instruction,
+      )
+      if (!res.success || !res.data?.suggestion) throw new Error(res.message || '重新生成失败')
+      void updateAISuggestionAction(card.recordId, 'ignored').catch(() => {})
+      card.recordId = res.data.record_id
+      card.text = res.data.suggestion
+      card.originalText = res.data.suggestion
+      card.providerName = res.data.provider_name
+      card.modelName = res.data.model_name
+    } catch (error: any) {
+      addToast({ message: error?.message || '重新生成失败', type: 'error' })
+    } finally {
+      card.regenerating = false
+      forceAIRevision((value) => value + 1)
     }
   }
 
@@ -1047,6 +1391,50 @@ export function ChatNew() {
     return d.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' }) +
       ' ' +
       d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+  }
+
+  const exportActiveConversation = async () => {
+    if (!activeAccountId || !activeCid || !activeConversation || exportingConversation) return
+    setExportingConversation(true)
+    try {
+      let allMessages = [...messages]
+      let hasMore = msgHasMore
+      let cursor = msgCursor
+      const visitedCursors = new Set<number>()
+      let pageCount = 0
+
+      while (hasMore) {
+        if (cursor === null || visitedCursors.has(cursor)) {
+          throw new Error('聊天记录分页游标异常，已停止导出以避免生成不完整文件')
+        }
+        if (pageCount >= 500) {
+          throw new Error('聊天记录页数超过安全上限，请联系开发者检查分页')
+        }
+        visitedCursors.add(cursor)
+        const result = await getMessages(activeAccountId, activeCid, cursor, 50)
+        if (result.messages.length === 0 && hasMore) {
+          throw new Error('较早的聊天记录暂时未返回，请稍后重试导出')
+        }
+        allMessages = [...result.messages, ...allMessages]
+        hasMore = result.hasMore
+        cursor = result.nextCursor
+        pageCount += 1
+      }
+
+      const merged = mergeChatMessages(allMessages)
+      const product = await resolveBusinessContext(activeAccountId, activeConversation)
+      const accountName = accounts.find((account) => account.account_id === activeAccountId)?.display_name || activeAccountId
+      const markdown = buildConversationMarkdown(accountName, activeConversation, merged, product)
+      downloadMarkdown(markdown.content, markdown.filename)
+      setMessages(merged)
+      setMsgHasMore(false)
+      setMsgCursor(null)
+      addToast({ message: `已导出当前会话，共 ${merged.length} 条消息`, type: 'success' })
+    } catch (error: any) {
+      addToast({ message: error?.message || '导出聊天记录失败', type: 'error' })
+    } finally {
+      setExportingConversation(false)
+    }
   }
 
   // ==================== 渲染 ====================
@@ -1312,12 +1700,58 @@ export function ChatNew() {
           </span>
           </div>
           {activeCid && (
-            <button onClick={handleBlacklistCustomer} disabled={blacklisting} className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded border border-red-200 text-red-500 hover:bg-red-50 disabled:opacity-40" title={isOfficiallyBlocked ? '解除闲鱼官方黑名单' : '加入闲鱼官方黑名单'}>
-              {blacklisting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Ban className="w-3.5 h-3.5" />}
-              {isOfficiallyBlocked ? '解除黑名单' : '加入黑名单'}
-            </button>
+            <div className="flex items-center gap-2">
+              <button onClick={() => void exportActiveConversation()} disabled={exportingConversation || loadingMsgs} className="inline-flex items-center gap-1 rounded border border-gray-200 px-2 py-1 text-xs text-gray-600 hover:bg-gray-50 disabled:opacity-40 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-700" title="导出当前买家会话的完整 Markdown 聊天记录">
+                {exportingConversation ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}{exportingConversation ? '导出中' : '导出 Markdown'}
+              </button>
+              <button onClick={() => void openAIAccountSettings()} className="inline-flex items-center gap-1 rounded border border-violet-200 px-2 py-1 text-xs text-violet-600 hover:bg-violet-50 dark:border-violet-800 dark:text-violet-300 dark:hover:bg-violet-950" title="当前账号 AI 模式与局部设置">
+                <Sparkles className="h-3.5 w-3.5" />{aiSetting?.mode === 'suggestion' ? 'AI 建议' : aiSetting?.mode === 'auto' ? 'AI 自动' : '手动'}
+              </button>
+              <button onClick={handleBlacklistCustomer} disabled={blacklisting} className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded border border-red-200 text-red-500 hover:bg-red-50 disabled:opacity-40" title={isOfficiallyBlocked ? '解除闲鱼官方黑名单' : '加入闲鱼官方黑名单'}>
+                {blacklisting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Ban className="w-3.5 h-3.5" />}
+                {isOfficiallyBlocked ? '解除黑名单' : '加入黑名单'}
+              </button>
+            </div>
           )}
         </div>
+        {showAIAccountSettings && aiSetting && (
+          <div className="border-b border-violet-200 bg-violet-50/80 p-3 dark:border-violet-900 dark:bg-violet-950/20">
+            <div className="mb-3 flex items-center justify-between">
+              <div>
+                <div className="text-sm font-medium text-gray-800 dark:text-gray-100">当前账号 AI 设置</div>
+                <div className="text-xs text-gray-500">局部设置优先；勾选继承时跟随管理员全局配置。</div>
+              </div>
+              <button onClick={() => setShowAIAccountSettings(false)} className="rounded p-1 text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700"><X className="h-4 w-4" /></button>
+            </div>
+            <div className="grid gap-3 text-xs md:grid-cols-3">
+              <label className="text-gray-600 dark:text-gray-300">工作模式
+                <select value={aiSetting.mode} onChange={(e) => setAISetting({ ...aiSetting, mode: e.target.value as AISuggestionAccountSetting['mode'] })} className="mt-1 w-full rounded border bg-white px-2 py-1.5 dark:border-gray-600 dark:bg-gray-800">
+                  <option value="manual">1. 手动模式</option>
+                  <option value="suggestion">2. AI 建议模式</option>
+                  <option value="auto">3. AI 自动模式（保留旧功能）</option>
+                </select>
+              </label>
+              <label className="text-gray-600 dark:text-gray-300">AI 连接
+                <select value={aiSetting.profile_id ?? ''} onChange={(e) => setAISetting({ ...aiSetting, profile_id: e.target.value ? Number(e.target.value) : null, inherited_profile: !e.target.value })} className="mt-1 w-full rounded border bg-white px-2 py-1.5 dark:border-gray-600 dark:bg-gray-800">
+                  <option value="">继承全局默认</option>
+                  {aiProfiles.filter((profile) => profile.enabled).map((profile) => <option key={profile.id} value={profile.id}>{profile.name} / {profile.model_name}</option>)}
+                </select>
+              </label>
+              <div>
+                <label className="flex items-center gap-1.5 text-gray-600 dark:text-gray-300"><input type="checkbox" checked={aiSetting.inherit_review_delay} onChange={(e) => setAISetting({ ...aiSetting, inherit_review_delay: e.target.checked })} />倒计时继承全局</label>
+                <input type="number" min={1} max={30} step={0.5} disabled={aiSetting.inherit_review_delay} value={aiSetting.review_delay_ms / 1000} onChange={(e) => setAISetting({ ...aiSetting, review_delay_ms: Math.round(Number(e.target.value) * 1000) })} className="mt-1 w-full rounded border bg-white px-2 py-1.5 disabled:bg-gray-100 dark:border-gray-600 dark:bg-gray-800 dark:disabled:bg-gray-700" />
+              </div>
+              <label className="flex items-center gap-1.5 text-gray-600 dark:text-gray-300"><input type="checkbox" checked={aiSetting.inherit_reply_style} onChange={(e) => setAISetting({ ...aiSetting, inherit_reply_style: e.target.checked })} />回复风格继承全局</label>
+              <label className="text-gray-600 dark:text-gray-300">语气
+                <select disabled={aiSetting.inherit_reply_style} value={aiSetting.reply_style.tone} onChange={(e) => setAISetting({ ...aiSetting, reply_style: { ...aiSetting.reply_style, tone: e.target.value as AISuggestionAccountSetting['reply_style']['tone'] } })} className="mt-1 w-full rounded border bg-white px-2 py-1.5 disabled:bg-gray-100 dark:border-gray-600 dark:bg-gray-800 dark:disabled:bg-gray-700">
+                  <option value="friendly">友好自然</option><option value="professional">专业可靠</option><option value="concise">直接简洁</option><option value="warm">耐心温和</option>
+                </select>
+              </label>
+              <label className="text-gray-600 dark:text-gray-300">称呼<input disabled={aiSetting.inherit_reply_style} value={aiSetting.reply_style.form_of_address} onChange={(e) => setAISetting({ ...aiSetting, reply_style: { ...aiSetting.reply_style, form_of_address: e.target.value } })} className="mt-1 w-full rounded border bg-white px-2 py-1.5 disabled:bg-gray-100 dark:border-gray-600 dark:bg-gray-800 dark:disabled:bg-gray-700" /></label>
+            </div>
+            <div className="mt-3 flex justify-end"><button onClick={() => void saveAIAccountSettings()} disabled={savingAIAccountSettings} className="inline-flex items-center gap-1 rounded bg-violet-600 px-3 py-1.5 text-xs text-white hover:bg-violet-700 disabled:opacity-50">{savingAIAccountSettings && <Loader2 className="h-3.5 w-3.5 animate-spin" />}保存账号设置</button></div>
+          </div>
+        )}
         {/* 消息区域 */}
         <div ref={msgContainerRef} className="flex-1 overflow-y-auto p-4 space-y-3">
           {!activeCid ? (
@@ -1421,6 +1855,142 @@ export function ChatNew() {
               className="hidden"
               onChange={handleImageSelected}
             />
+            {aiSetting?.mode === 'suggestion' && activeAIGroup && (
+              <div className={`mb-3 rounded-xl border-2 p-3 ${activeAIGroup.blocked ? 'border-red-400 bg-red-50 dark:bg-red-950/20' : 'border-amber-400 bg-amber-50 dark:bg-amber-950/20'}`}>
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5 text-sm font-medium text-gray-800 dark:text-gray-100">
+                    <Sparkles className="h-4 w-4 text-amber-500" />
+                    发送给 AI 前请检查（整组）
+                  </div>
+                  {!activeAIGroup.editing && !activeAIGroup.cancelledByManual && (
+                    <span className="text-xs tabular-nums text-amber-700 dark:text-amber-300">
+                      {(activeAIGroup.remainingMs / 1000).toFixed(1)} 秒
+                    </span>
+                  )}
+                </div>
+                <div className="space-y-2">
+                  {(activeAIGroup.editing ? activeAIGroup.draftMessages : activeAIGroup.messages)?.map((message, index) => (
+                    <div key={`${activeAIGroup.id}-${index}`} className="rounded-lg border border-amber-200 bg-white/90 p-2 dark:border-amber-800 dark:bg-gray-800/80">
+                      <div className="mb-1 text-xs font-medium text-gray-500">{message.role === 'buyer' ? '买家' : '我（已发送）'}</div>
+                      {activeAIGroup.editing ? (
+                        <textarea
+                          value={message.content}
+                          onChange={(event) => {
+                            if (!activeAIGroup.draftMessages) return
+                            activeAIGroup.draftMessages[index] = { ...message, content: event.target.value }
+                            forceAIRevision((value) => value + 1)
+                          }}
+                          rows={2}
+                          className="w-full resize-y rounded border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-800 focus:border-blue-500 focus:outline-none dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100"
+                        />
+                      ) : (
+                        <div className="whitespace-pre-wrap break-words text-sm text-gray-800 dark:text-gray-100">{message.content}</div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                {activeAIGroup.blocked && (
+                  <p className="mt-2 text-xs text-red-600">检测到密码、Cookie、Token、API Key 或验证码等高风险信息。原文未发送给 AI，请先修改副本。</p>
+                )}
+                {activeAIGroup.cancelledByManual && !activeAIGroup.editing && (
+                  <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">你已经人工回复，本组自动分析已取消。</p>
+                )}
+                {!activeAIGroup.editing && !activeAIGroup.cancelledByManual && (
+                  <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-amber-100 dark:bg-amber-900">
+                    <div
+                      className="h-full bg-amber-500 transition-[width] duration-100"
+                      style={{ width: `${Math.max(0, Math.min(100, (activeAIGroup.remainingMs / (aiSetting.review_delay_ms || 4000)) * 100))}%` }}
+                    />
+                  </div>
+                )}
+                <div className="mt-3 flex items-center justify-end gap-2">
+                  {activeAIGroup.editing ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          activeAIGroup.editing = false
+                          activeAIGroup.blocked = false
+                          activeAIGroup.draftMessages = undefined
+                          activeAIGroup.remainingMs = aiSetting.review_delay_ms
+                          forceAIRevision((value) => value + 1)
+                        }}
+                        className="rounded px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-200 dark:text-gray-300 dark:hover:bg-gray-700"
+                      >取消修改</button>
+                      <button
+                        type="button"
+                        disabled={activeAIGroup.generating}
+                        onClick={() => void submitActiveAIGroup(activeAIGroup.draftMessages)}
+                        className="inline-flex items-center gap-1 rounded bg-blue-500 px-3 py-1.5 text-xs text-white hover:bg-blue-600 disabled:opacity-50"
+                      >{activeAIGroup.generating && <Loader2 className="h-3.5 w-3.5 animate-spin" />}提交给 AI</button>
+                    </>
+                  ) : (
+                    <>
+                      {activeAIGroup.cancelledByManual && (
+                        <button
+                          type="button"
+                          onClick={() => void submitActiveAIGroup()}
+                          className="rounded bg-blue-500 px-3 py-1.5 text-xs text-white hover:bg-blue-600"
+                        >仍然生成建议</button>
+                      )}
+                      <button
+                        type="button"
+                        title="立即将整组发送给 AI"
+                        disabled={activeAIGroup.generating}
+                        onClick={() => void submitActiveAIGroup()}
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-green-400 text-green-600 hover:bg-green-100 disabled:opacity-50 dark:hover:bg-green-950"
+                      >{activeAIGroup.generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}</button>
+                      <button
+                        type="button"
+                        title="拒绝将整组发送给 AI"
+                        disabled={activeAIGroup.generating}
+                        onClick={() => void rejectActiveAIGroup()}
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-red-400 text-red-500 hover:bg-red-100 disabled:opacity-50 dark:hover:bg-red-950"
+                      ><X className="h-4 w-4" /></button>
+                      <button
+                        type="button"
+                        title="修改副本后发送给 AI"
+                        disabled={activeAIGroup.generating}
+                        onClick={() => {
+                          activeAIGroup.editing = true
+                          activeAIGroup.draftMessages = activeAIGroup.messages.map((item) => ({ ...item }))
+                          forceAIRevision((value) => value + 1)
+                        }}
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-blue-400 text-blue-500 hover:bg-blue-100 disabled:opacity-50 dark:hover:bg-blue-950"
+                      ><Circle className="h-4 w-4" /></button>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+            {aiSetting?.mode === 'suggestion' && activeSuggestionCard && (
+              <div className="mb-3 rounded-xl border border-violet-300 bg-violet-50 p-3 dark:border-violet-800 dark:bg-violet-950/20">
+                <div className="mb-2 flex items-center justify-between">
+                  <div className="flex items-center gap-1.5 text-sm font-medium text-violet-800 dark:text-violet-200">
+                    <Sparkles className="h-4 w-4" />AI 建议（尚未发送）
+                  </div>
+                  <span className="text-xs text-gray-400">{activeSuggestionCard.providerName} / {activeSuggestionCard.modelName}</span>
+                </div>
+                <textarea
+                  value={activeSuggestionCard.text}
+                  onChange={(event) => {
+                    activeSuggestionCard.text = event.target.value
+                    forceAIRevision((value) => value + 1)
+                  }}
+                  rows={3}
+                  className="w-full resize-y rounded-lg border border-violet-200 bg-white px-3 py-2 text-sm text-gray-800 focus:border-violet-500 focus:outline-none dark:border-violet-800 dark:bg-gray-800 dark:text-gray-100"
+                />
+                <div className="mt-2 flex flex-wrap justify-end gap-2">
+                  <button type="button" onClick={() => void ignoreActiveSuggestion()} className="rounded px-3 py-1.5 text-xs text-gray-500 hover:bg-gray-200 dark:hover:bg-gray-700">忽略</button>
+                  <button type="button" disabled={activeSuggestionCard.regenerating} onClick={() => void regenerateActiveSuggestion()} className="inline-flex items-center gap-1 rounded border border-violet-300 px-3 py-1.5 text-xs text-violet-600 hover:bg-violet-100 disabled:opacity-50 dark:border-violet-700 dark:text-violet-300">
+                    {activeSuggestionCard.regenerating && <Loader2 className="h-3.5 w-3.5 animate-spin" />}重新生成
+                  </button>
+                  <button type="button" disabled={sending || !activeSuggestionCard.text.trim()} onClick={() => void sendActiveSuggestion()} className="inline-flex items-center gap-1 rounded bg-violet-600 px-3 py-1.5 text-xs text-white hover:bg-violet-700 disabled:opacity-50">
+                    <Send className="h-3.5 w-3.5" />发送给买家
+                  </button>
+                </div>
+              </div>
+            )}
             {pendingImage && (
               <div className="mb-2 inline-flex items-start gap-2 rounded-lg border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700/50 p-2">
                 <img

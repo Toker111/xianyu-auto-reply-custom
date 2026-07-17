@@ -788,9 +788,11 @@ class GoofishImClient:
             f"【{self.account_id}】检测到风控，委托WebSocket过滑块: {verification_url[:80]}..."
         )
         # 携带当前Cookie与设备ID：验证链接过期时 WebSocket 端可凭此重取新鲜链接
+        manual_mode = await self._is_manual_captcha_mode_enabled()
         resp = await websocket_client.solve_captcha(
             account_id=self.account_id,
             url=verification_url,
+            browser_timeout=180 if manual_mode else 40,
             call_type="local",
             cookies=self.cookies_str,
             device_id=self.device_id,
@@ -814,6 +816,24 @@ class GoofishImClient:
             f"【{self.account_id}】过滑块成功，已合并 {len(new_cookies)} 个Cookie并更新数据库"
         )
         return True
+
+    async def _is_manual_captcha_mode_enabled(self) -> bool:
+        """读取账号级人工验证开关，用于给人工操作预留足够的HTTP等待时间。"""
+        try:
+            async with async_session_maker() as session:
+                result = await session.execute(
+                    text(
+                        "SELECT captcha_manual_mode FROM xy_accounts "
+                        "WHERE account_id = :account_id LIMIT 1"
+                    ),
+                    {"account_id": self.account_id},
+                )
+                return bool(result.scalar())
+        except Exception as mode_error:
+            logger.warning(
+                f"【{self.account_id}】读取人工滑块验证开关失败，保持原验证模式: {mode_error}"
+            )
+            return False
 
     async def _register(self):
         """发送注册消息 (/reg) 并等待服务器确认，然后发送 ackDiff"""

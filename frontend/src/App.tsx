@@ -53,6 +53,7 @@ const SubDealerManagement = React.lazy(() => import('@/pages/distribution/SubDea
 const SourceManagement = React.lazy(() => import('@/pages/distribution/SourceManagement').then(m => ({ default: m.SourceManagement })))
 const AgentOrders = React.lazy(() => import('@/pages/distribution/AgentOrders').then(m => ({ default: m.AgentOrders })))
 const CardPickup = React.lazy(() => import('@/pages/distribution/CardPickup').then(m => ({ default: m.CardPickup })))
+const AISuggestionRecords = React.lazy(() => import('@/pages/ai-suggestion/AISuggestionRecords').then(m => ({ default: m.AISuggestionRecords })))
 
 // 共享多人扫码登录
 const SharedScanManager = React.lazy(() => import('@/pages/shared-scan/SharedScanManager').then(m => ({ default: m.SharedScanManager })))
@@ -81,6 +82,7 @@ const AccountLoginLogs = React.lazy(() => import('@/pages/admin/AccountLoginLogs
 const DbBackupLogs = React.lazy(() => import('@/pages/admin/DbBackupLogs').then(m => ({ default: m.DbBackupLogs })))
 const DataManagement = React.lazy(() => import('@/pages/admin/DataManagement').then(m => ({ default: m.DataManagement })))
 const ScheduledTasks = React.lazy(() => import('@/pages/admin/ScheduledTasks').then(m => ({ default: m.ScheduledTasks })))
+const AISuggestionSettings = React.lazy(() => import('@/pages/admin/AISuggestionSettings').then(m => ({ default: m.AISuggestionSettings })))
 const RedeliveryBatches = React.lazy(() => import('@/pages/redeliveryLogs/RedeliveryBatches').then(m => ({ default: m.RedeliveryBatches })))
 const RedeliveryBatchDetailPage = React.lazy(() => import('@/pages/redeliveryLogs/RedeliveryBatchDetail').then(m => ({ default: m.RedeliveryBatchDetailPage })))
 const RateBatches = React.lazy(() => import('@/pages/rateLogs/RateBatches').then(m => ({ default: m.RateBatches })))
@@ -339,6 +341,7 @@ function App() {
             <Route path="orders" element={<Orders />} />
             <Route path="keywords" element={<Keywords />} />
             <Route path="message-logs" element={<AutoReplyLogs />} />
+            <Route path="ai-suggestion-records" element={<AISuggestionRecords />} />
             <Route path="account-login-logs" element={<Navigate to="/admin/account-login-logs" replace />} />
             <Route path="risk-logs" element={<RiskLogs />} />
             <Route path="message-filters" element={<MessageFilters />} />
@@ -408,6 +411,7 @@ function App() {
             <Route path="admin/red-flower-batches" element={<RedFlowerBatches />} />
             <Route path="admin/red-flower-batches/:batchId" element={<RedFlowerBatchDetailPage />} />
             <Route path="admin/scheduled-tasks" element={<ScheduledTasks />} />
+            <Route path="admin/ai-suggestion-settings" element={<AISuggestionSettings />} />
             <Route path="admin/announcements" element={<Announcements />} />
             <Route path="admin/ad-manage" element={<AdManage />} />
             <Route path="admin/popup-announcements" element={<PopupAnnouncements />} />

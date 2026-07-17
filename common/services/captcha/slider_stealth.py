@@ -517,6 +517,7 @@ class PlaywrightSliderService:
         url: str,
         browser_timeout: int = 20,
         url_provider: Optional[Callable[[], Optional[str]]] = None,
+        manual_mode: bool = False,
     ) -> Tuple[bool, Optional[Dict[str, str]]]:
         """
         运行滑块验证流程
@@ -524,6 +525,8 @@ class PlaywrightSliderService:
         Args:
             url: 验证页面URL
             browser_timeout: 浏览器验证超时时间（秒），默认20秒
+            manual_mode: 是否为纯人工验证。开启后仅展示官方页面并等待用户操作，
+                不执行程序鼠标移动、滚动或自动拖动。
             url_provider: 可选的"重新获取验证链接"回调。由于 __init__ 中需要等待并发槽位/
                 账号锁，再加上浏览器启动耗时，传入的 url（punish?x5secdata=...）可能在导航前
                 就已过期，导致页面显示"抱歉，页面访问出现了问题"。提供该回调后：仅当导航命中
@@ -564,10 +567,22 @@ class PlaywrightSliderService:
                 logger.warning(f"【{self.pure_user_id}】超时守护：未匹配到需强杀的浏览器进程（可能尚未启动或已退出）")
         
         try:
-            # 初始化浏览器
-            self.init_browser()
+            # 人工模式必须显示浏览器；该账号级开关只允许在有桌面的 Windows 本机使用。
+            if manual_mode:
+                if os.name != "nt":
+                    logger.error(f"【{self.pure_user_id}】人工验证模式仅支持有桌面的 Windows 源码部署")
+                    return False, None
+                self.headless = False
+
+            # 人工模式不注入自动化反检测脚本，也不执行任何模拟操作。
+            self.init_browser(add_stealth_script=not manual_mode)
             browser_start_time = time.time()
-            logger.info(f"【{self.pure_user_id}】浏览器已启动，{browser_timeout}秒内未完成验证将自动关闭")
+            if manual_mode:
+                logger.info(
+                    f"【{self.pure_user_id}】人工滑块验证窗口已打开，请用户在{browser_timeout}秒内亲自完成官方验证"
+                )
+            else:
+                logger.info(f"【{self.pure_user_id}】浏览器已启动，{browser_timeout}秒内未完成验证将自动关闭")
 
             # 启动超时守护定时器
             import threading
@@ -615,13 +630,14 @@ class PlaywrightSliderService:
                 if timed_out:
                     return None
 
-                # 快速滚动（模拟人类行为）
-                self.page.mouse.move(640, 360)
-                time.sleep(random.uniform(0.02, 0.05))
-                self.page.mouse.wheel(0, random.randint(200, 500))
-                time.sleep(random.uniform(0.02, 0.05))
-                if timed_out:
-                    return None
+                if not manual_mode:
+                    # 自动模式保持原有页面预处理；人工模式不得控制用户鼠标或页面滚动。
+                    self.page.mouse.move(640, 360)
+                    time.sleep(random.uniform(0.02, 0.05))
+                    self.page.mouse.wheel(0, random.randint(200, 500))
+                    time.sleep(random.uniform(0.02, 0.05))
+                    if timed_out:
+                        return None
 
                 # 检查页面标题
                 page_title = self.page.title()
@@ -675,11 +691,17 @@ class PlaywrightSliderService:
             if any(keyword in page_content for keyword in ["验证码", "captcha", "滑块", "slider"]):
                 logger.info(f"【{self.pure_user_id}】页面内容包含验证码相关关键词")
 
-                # 处理滑块验证（带超时检查）
-                success = self._solve_slider_with_timeout(browser_start_time, browser_timeout)
+                # 人工模式只轮询官方页面的真实放行结果，绝不自动拖动滑块。
+                success = (
+                    self._wait_for_manual_verification(browser_start_time, browser_timeout)
+                    if manual_mode
+                    else self._solve_slider_with_timeout(browser_start_time, browser_timeout)
+                )
 
                 if success:
-                    logger.info(f"【{self.pure_user_id}】滑块验证成功")
+                    logger.info(
+                        f"【{self.pure_user_id}】{'人工' if manual_mode else '自动'}滑块验证成功"
+                    )
 
                     # 等待页面完全加载和跳转，让新的cookie生效
                     try:
@@ -1174,10 +1196,8 @@ class PlaywrightSliderService:
                 lname = name.lower()
                 if lname.startswith("x5") or "x5sec" in lname:
                     filtered[name] = value
-                    logger.info(
-                        f"【{self.pure_user_id}】x5相关cookie已获取: {name} = "
-                        f"{value[:80]}{'...' if len(value) > 80 else ''}"
-                    )
+                    # Cookie 值属于敏感凭证，只记录字段名，绝不写入日志。
+                    logger.info(f"【{self.pure_user_id}】x5相关cookie已获取: {name}")
 
             logger.info(
                 f"【{self.pure_user_id}】找到{len(filtered)}个x5相关cookies: "
@@ -1197,6 +1217,49 @@ class PlaywrightSliderService:
         except Exception as e:
             logger.error(f"【{self.pure_user_id}】获取滑块验证成功后的cookie失败: {str(e)}")
             return None
+
+    def _wait_for_manual_verification(self, browser_start_time: float, browser_timeout: int) -> bool:
+        """等待用户在可见浏览器中亲自完成官方验证。
+
+        本方法不移动鼠标、不点击、不拖动，只检查官方页面是否已离开 punish 地址且
+        浏览器上下文中出现真正的 x5sec Cookie。关闭窗口或超时均按失败处理。
+        """
+        logger.info(
+            f"【{self.pure_user_id}】人工模式等待中：程序不会操作鼠标，请用户在浏览器中完成验证"
+        )
+        punish_keywords = ("punish", "x5step=2", "action=captcha", "pureCaptcha")
+        last_status_log = 0.0
+
+        while time.time() - browser_start_time < browser_timeout:
+            try:
+                if not self.page or self.page.is_closed():
+                    logger.warning(f"【{self.pure_user_id}】用户关闭了人工验证窗口")
+                    return False
+
+                current_url = self.page.url or ""
+                in_punish = any(keyword in current_url for keyword in punish_keywords)
+                browser_cookies = self.context.cookies() if self.context else []
+                has_x5sec = any(
+                    str(cookie.get("name", "")).lower() == "x5sec" and bool(cookie.get("value"))
+                    for cookie in browser_cookies
+                )
+
+                if has_x5sec and not in_punish:
+                    logger.info(f"【{self.pure_user_id}】检测到官方页面已放行人工验证")
+                    return True
+
+                now = time.time()
+                if now - last_status_log >= 15:
+                    remaining = max(0, int(browser_timeout - (now - browser_start_time)))
+                    logger.info(f"【{self.pure_user_id}】仍在等待人工验证，剩余约{remaining}秒")
+                    last_status_log = now
+            except Exception as check_error:
+                logger.debug(f"【{self.pure_user_id}】检查人工验证状态时暂时失败: {check_error}")
+
+            time.sleep(0.5)
+
+        logger.warning(f"【{self.pure_user_id}】人工验证等待超时")
+        return False
 
     def _kill_browser_processes(self) -> int:
         """按本次唯一的 user_data_dir 精确强杀 Chromium 进程（含子进程）。
@@ -1424,6 +1487,7 @@ def run_slider_verification(
     headless: bool = False,
     browser_timeout: int = 20,
     url_provider: Optional[Callable[[], Optional[str]]] = None,
+    manual_mode: bool = False,
 ) -> Tuple[bool, Optional[Dict[str, str]]]:
     """在独立进程中运行滑块验证（模块级别函数，支持ProcessPoolExecutor）
     
@@ -1445,7 +1509,12 @@ def run_slider_verification(
             enable_learning=enable_learning,
             headless=headless
         )
-        return slider.run(url, browser_timeout=browser_timeout, url_provider=url_provider)
+        return slider.run(
+            url,
+            browser_timeout=browser_timeout,
+            url_provider=url_provider,
+            manual_mode=manual_mode,
+        )
     except Exception as e:
         logger.error(f"【{user_id}】滑块验证进程执行失败: {e}")
         return False, None

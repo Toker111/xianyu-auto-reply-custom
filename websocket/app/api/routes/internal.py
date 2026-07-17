@@ -335,7 +335,7 @@ async def restart_account(account_id: str, request: StartAccountRequest = None):
 
 @router.post("/captcha/solve")
 async def solve_captcha(request: SolveCaptchaRequest):
-    """过滑块（独立/无状态）：仅凭传入的 punish 链接求解滑块。
+    """处理官方滑块验证；本机账号可按账号配置进入纯人工模式。
 
     模式B：不依赖账号是否运行、不查数据库、不注入/回填 cookies。
     成功返回解出的 x5* cookies，失败直接返回 success=false（供外部系统使用）。
@@ -352,9 +352,31 @@ async def solve_captcha(request: SolveCaptchaRequest):
     # 清洗 account_id（外部传入，仅用于日志与浏览器实例目录隔离，防止路径注入）
     raw_id = (request.account_id or "external").strip()
     safe_id = re.sub(r"[^A-Za-z0-9_-]", "", raw_id)[:64] or "external"
-    timeout = max(20, min(int(request.browser_timeout or 40), 120))
     call_type = (request.call_type or "remote").strip() or "remote"
     call_user = (request.call_user or "").strip() or None
+
+    # 只有本机调用且数据库中确有该账号时，才允许启用账号级人工模式。
+    # 外部远程请求不能通过伪造请求体打开本机可见浏览器。
+    manual_mode = False
+    if call_type == "local":
+        try:
+            from sqlalchemy import select
+            from common.db.session import async_session_maker
+            from common.models.xy_account import XYAccount
+
+            async with async_session_maker() as session:
+                mode_result = await session.execute(
+                    select(XYAccount.captcha_manual_mode).where(XYAccount.account_id == safe_id)
+                )
+                manual_mode = bool(mode_result.scalar())
+        except Exception as mode_error:
+            logger.warning(f"【过滑块接口】读取账号人工验证开关失败，保持原模式: {mode_error}")
+
+    timeout = (
+        max(60, min(int(request.browser_timeout or 180), 300))
+        if manual_mode
+        else max(20, min(int(request.browser_timeout or 40), 120))
+    )
 
     # 记录风控日志（处理中）
     log_id = None
@@ -424,7 +446,15 @@ async def solve_captcha(request: SolveCaptchaRequest):
         slider_args = (
             safe_id, url, True, False, timeout, existing_cookies_str, url_provider,
         )
-        if is_real_mouse_enabled():
+        if manual_mode:
+            logger.info(f"【过滑块接口】account_id={safe_id} 使用账号级人工验证模式")
+            success, cookies, engine = await run_browser_task(
+                run_slider_verification_with_fallback,
+                *slider_args,
+                weight_class=weight_class,
+                manual_mode=True,
+            )
+        elif is_real_mouse_enabled():
             # 被调用方请求在线程池之前参与本地/远程实时加权排队。
             success, cookies, engine = await real_mouse_weighted_runner.submit(
                 weight_class,

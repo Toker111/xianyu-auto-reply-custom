@@ -41,6 +41,7 @@ class AccountDetail(BaseModel):
     username: str | None = None
     login_password: str | None = None
     show_browser: bool = False
+    captcha_manual_mode: bool = False
     disable_reason: str | None = None
     filter_count: int = 0  # 消息过滤规则数量
 
@@ -94,6 +95,7 @@ class AccountLoginInfoUpdate(BaseModel):
     username: str | None = Field(None, description="登录用户名")
     login_password: str | None = Field(None, description="登录密码")
     show_browser: bool | None = Field(None, description="是否显示浏览器")
+    captcha_manual_mode: bool | None = Field(None, description="是否启用纯人工滑块验证模式")
 
 
 class AccountMessageExpireTimeUpdate(BaseModel):

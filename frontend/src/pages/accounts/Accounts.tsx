@@ -170,6 +170,7 @@ export function Accounts() {
   const [editPassword, setEditPassword] = useState('')
   const [editPasswordVisible, setEditPasswordVisible] = useState(false)
   const [editShowBrowser, setEditShowBrowser] = useState(false)
+  const [editCaptchaManualMode, setEditCaptchaManualMode] = useState(false)
   const [editSaving, setEditSaving] = useState(false)
 
   // AI设置状态
@@ -1053,6 +1054,7 @@ export function Accounts() {
     setEditUsername(account.username || '')
     setEditPassword(account.login_password || '')
     setEditShowBrowser(account.show_browser || false)
+    setEditCaptchaManualMode(account.captcha_manual_mode || false)
     setActiveModal('edit')
   }
 
@@ -1084,13 +1086,15 @@ export function Accounts() {
       const loginInfoChanged = 
         editUsername !== (editingAccount.username || '') ||
         editPassword !== (editingAccount.login_password || '') ||
-        editShowBrowser !== (editingAccount.show_browser || false)
+        editShowBrowser !== (editingAccount.show_browser || false) ||
+        editCaptchaManualMode !== (editingAccount.captcha_manual_mode || false)
       
       if (loginInfoChanged) {
         promises.push(updateAccountLoginInfo(editingAccount.id, {
           username: editUsername,
           login_password: editPassword,
           show_browser: editShowBrowser,
+          captcha_manual_mode: editCaptchaManualMode,
         }))
       }
 
@@ -3124,6 +3128,20 @@ export function Accounts() {
                       />
                       显示浏览器(只有Windows源码部署用)
                     </label>
+                    <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-950/20">
+                      <label className="flex items-center gap-2 text-sm font-medium text-amber-800 dark:text-amber-200">
+                        <input
+                          type="checkbox"
+                          checked={editCaptchaManualMode}
+                          onChange={(e) => setEditCaptchaManualMode(e.target.checked)}
+                          className="h-4 w-4 rounded border-amber-300 text-amber-600"
+                        />
+                        人工滑块验证模式
+                      </label>
+                      <p className="mt-1 text-xs leading-5 text-amber-700 dark:text-amber-300">
+                        开启后，本账号遇到风控时只打开一个可见浏览器，不再自动拖动滑块；请在约3分钟内亲自完成官方验证。关闭后恢复原验证流程。
+                      </p>
+                    </div>
                   </div>
                 </div>
               </div>

@@ -440,6 +440,26 @@ class CookieTokenManager:
             logger.warning(f"【{self.cookie_id}】读取远程过滑块配置失败（走本机逻辑）: {self._safe_str(e)}")
         return None
 
+    async def _is_manual_captcha_mode_enabled(self) -> bool:
+        """读取当前闲鱼账号的人工滑块验证开关，读取失败时安全回退为关闭。"""
+        try:
+            from sqlalchemy import select
+            from common.models.xy_account import XYAccount
+
+            async with async_session_maker() as session:
+                result = await session.execute(
+                    select(XYAccount.captcha_manual_mode).where(
+                        XYAccount.account_id == str(self.cookie_id)
+                    )
+                )
+                return bool(result.scalar())
+        except Exception as mode_error:
+            logger.warning(
+                f"【{self.cookie_id}】读取人工滑块验证开关失败，保持原验证模式: "
+                f"{self._safe_str(mode_error)}"
+            )
+            return False
+
     async def handle_captcha_verification(self, res_json: dict) -> str:
         """处理滑块验证，返回新的cookies字符串"""
         try:
@@ -493,19 +513,28 @@ class CookieTokenManager:
                 self._refetch_new_token = None
                 self._refetch_new_cookies = {}
 
-                # 读取全局"远程过滑块"配置（system_settings，仅管理员可配）。
-                # 配置了则优先走远程接口；远程超时/不可用时回退本机逻辑。
-                remote_config = await self._load_remote_captcha_config()
+                manual_mode = await self._is_manual_captcha_mode_enabled()
+
+                # 人工模式禁止远程与全部自动求解器；关闭时保持原有远程配置逻辑。
+                remote_config = None if manual_mode else await self._load_remote_captcha_config()
 
                 # 真实鼠标任务先按权重排队，其他模式保持使用原浏览器任务专用线程池；
                 # 两条路径都不占用 asyncio 默认线程池，避免饿死 aiohttp 的 DNS 解析。
                 # run_slider_verification_with_fallback: 远程(可选)→真人/主引擎(Playwright)→DrissionPage 兜底
                 # 返回 (是否成功, cookies, 通过引擎: remote/real_mouse/playwright/drissionpage/None)
+                slider_timeout = 180 if manual_mode else 20
                 slider_args = (
-                    f"{self.cookie_id}", verification_url, True, False, 20,
+                    f"{self.cookie_id}", verification_url, True, False, slider_timeout,
                     self.cookies_str, self._request_captcha_url_sync, remote_config,
                 )
-                if remote_config is None and is_real_mouse_enabled():
+                if manual_mode:
+                    logger.info(f"【{self.cookie_id}】账号已开启人工滑块验证模式")
+                    success, cookies, captcha_engine = await run_browser_task(
+                        run_slider_verification_with_fallback,
+                        *slider_args,
+                        manual_mode=True,
+                    )
+                elif remote_config is None and is_real_mouse_enabled():
                     # 本机真实鼠标任务先进入前置本地队列，再提交给原浏览器执行器。
                     success, cookies, captcha_engine = await real_mouse_weighted_runner.submit(
                         "local",
@@ -553,8 +582,8 @@ class CookieTokenManager:
 
                 if success and cookies:
                     logger.info(f"【{self.cookie_id}】滑块验证成功，获取到新的cookies")
-                    # 打印滑块验证返回的全部cookies
-                    logger.warning(f"【{self.cookie_id}】滑块验证返回的全部cookies: {cookies}")
+                    # Cookie 属于登录凭证，只记录数量，不输出名称对应的值。
+                    logger.info(f"【{self.cookie_id}】滑块验证返回 {len(cookies)} 个受控Cookie字段")
                     
                     # 更新风控日志为成功状态
                     captcha_duration = time.time() - captcha_start_time
@@ -566,6 +595,7 @@ class CookieTokenManager:
                                 'real_mouse': '真人鼠标引擎(RealMouse)',
                                 'remote': '远程接口(Remote)',
                                 'playwright': '主引擎(Playwright)',
+                                'manual': '人工验证(Manual)',
                             }
                             engine_label = engine_label_map.get(captcha_engine, '主引擎(Playwright)')
                             db_manager.update_risk_control_log(
@@ -636,8 +666,7 @@ class CookieTokenManager:
                         self.cookies_str = cookies_str
                         self.cookies = updated_cookies
                         
-                        # 打印更新后的x5sec值
-                        logger.warning(f"【{self.cookie_id}】准备保存到数据库的x5sec: {updated_cookies.get('x5sec', '无')}")
+                        logger.info(f"【{self.cookie_id}】准备保存人工/滑块验证产生的受控Cookie字段")
 
                         await self.update_config_cookies()
                         logger.info(f"【{self.cookie_id}】滑块验证成功后，数据库cookies已自动更新")

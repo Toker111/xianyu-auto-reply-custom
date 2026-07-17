@@ -185,6 +185,7 @@ class DBManagerCompat:
                     'username': account.username,
                     'password': account.login_password,
                     'show_browser': account.show_browser,
+                    'captcha_manual_mode': account.captcha_manual_mode,
                     'proxy_type': account.proxy_type,
                     'proxy_host': account.proxy_host,
                     'proxy_port': account.proxy_port,

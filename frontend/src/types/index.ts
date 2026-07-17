@@ -68,6 +68,7 @@ export interface Account {
   username?: string
   login_password?: string
   show_browser?: boolean
+  captcha_manual_mode?: boolean
   disable_reason?: string
   created_at?: string
   updated_at?: string

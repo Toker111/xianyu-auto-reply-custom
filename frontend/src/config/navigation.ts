@@ -34,6 +34,7 @@ import {
   ShoppingCart,
   Star,
   Store,
+  Sparkles,
   Tags,
   Ticket,
   Timer,
@@ -131,6 +132,7 @@ export const mainNavItems: NavEntry[] = [
   },
   { key: 'keywords', icon: MessageSquare, label: '自动回复', path: '/keywords' },
   { key: 'message-logs', icon: ScrollText, label: '消息日志', path: '/message-logs' },
+  { key: 'ai-suggestion-records', icon: Sparkles, label: 'AI 建议记录', path: '/ai-suggestion-records' },
   { key: 'risk-logs', icon: Shield, label: '风控日志', path: '/risk-logs' },
   { key: 'message-filters', icon: Filter, label: '消息过滤', path: '/message-filters' },
   { key: 'notification-channels', icon: Bell, label: '通知渠道', path: '/notification-channels' },
@@ -141,6 +143,7 @@ export const mainNavItems: NavEntry[] = [
 
 export const adminNavItems: NavEntry[] = [
   { key: 'settings', icon: Settings, label: '系统设置', path: '/settings', adminOnly: true },
+  { key: 'admin-ai-suggestion-settings', icon: Sparkles, label: 'AI 建议设置', path: '/admin/ai-suggestion-settings', adminOnly: true },
   { key: 'admin-users', icon: UserCog, label: '用户管理', path: '/admin/users', adminOnly: true },
   {
     key: 'admin-logs',

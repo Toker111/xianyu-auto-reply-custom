@@ -42,6 +42,11 @@ class XYAccount(TimestampMixin, Base):
     pause_duration: Mapped[int] = mapped_column(Integer, default=10, comment="暂停时长(分钟)")
     auto_confirm: Mapped[bool] = mapped_column(Boolean, default=False, comment="自动确认发货")
     show_browser: Mapped[bool] = mapped_column(Boolean, default=False, comment="显示浏览器")
+    captcha_manual_mode: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        comment="人工滑块验证模式：仅打开可见浏览器，由用户手动完成官方验证",
+    )
     metadata_json: Mapped[dict[str, Any] | None] = mapped_column("metadata", JSON, comment="元数据")
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), comment="最后登录时间")
     last_refresh_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), comment="最后刷新时间")

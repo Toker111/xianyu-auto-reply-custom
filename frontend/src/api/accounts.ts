@@ -84,6 +84,7 @@ export const getAccountDetailsPaginated = async (
     username?: string
     login_password?: string
     show_browser?: boolean
+    captcha_manual_mode?: boolean
     disable_reason?: string
     filter_count?: number
     today_reply_count?: number
@@ -162,6 +163,7 @@ export const getAccountDetailsPaginated = async (
       username: item.username,
       login_password: item.login_password,
       show_browser: item.show_browser,
+      captcha_manual_mode: item.captcha_manual_mode ?? false,
       disable_reason: item.disable_reason,
       filter_count: item.filter_count || 0,
       today_reply_count: item.today_reply_count || 0,
@@ -332,7 +334,7 @@ export const getAvailableDeliveryBlockRules = (): Promise<ApiResponse> => {
 // 更新账号登录信息（用户名、密码、是否显示浏览器）
 export const updateAccountLoginInfo = (
   id: string,
-  data: { username?: string; login_password?: string; show_browser?: boolean }
+  data: { username?: string; login_password?: string; show_browser?: boolean; captcha_manual_mode?: boolean }
 ): Promise<ApiResponse> => {
   return put(`${COOKIE_PREFIX}/${id}/login-info`, data)
 }

@@ -398,6 +398,7 @@ class DatabaseInitializer:
                 pause_duration INT DEFAULT 10 COMMENT '暂停时长(分钟)',
                 auto_confirm TINYINT(1) DEFAULT 0 COMMENT '自动确认发货',
                 show_browser TINYINT(1) DEFAULT 0 COMMENT '显示浏览器',
+                captcha_manual_mode TINYINT(1) NOT NULL DEFAULT 0 COMMENT '人工滑块验证模式',
                 metadata JSON COMMENT '元数据',
                 last_login_at DATETIME COMMENT '最后登录时间',
                 last_refresh_at DATETIME COMMENT '最后刷新时间',
@@ -594,6 +595,100 @@ class DatabaseInitializer:
                 INDEX ix_ai_chat_messages_chat_cookie (chat_id, cookie_id),
                 INDEX ix_ai_chat_messages_intent (cookie_id, intent)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='AI聊天消息表';
+        """,
+
+        # 12.1 AI建议模式：连接配置（API Key 只保存密文）
+        "xy_ai_connection_profiles": """
+            CREATE TABLE IF NOT EXISTS xy_ai_connection_profiles (
+                id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                name VARCHAR(120) NOT NULL UNIQUE COMMENT '配置名称',
+                provider_type VARCHAR(32) NOT NULL COMMENT 'deepseek/openai_compatible',
+                base_url VARCHAR(500) NOT NULL COMMENT 'API基础地址',
+                model_name VARCHAR(160) NOT NULL COMMENT '模型名',
+                api_key_ciphertext TEXT NOT NULL COMMENT 'API Key密文',
+                enabled TINYINT(1) NOT NULL DEFAULT 1,
+                is_global_default TINYINT(1) NOT NULL DEFAULT 0,
+                allowed_user_ids JSON COMMENT '允许使用的用户ID；空为全部',
+                fallback_profile_ids JSON COMMENT '显式失败回退顺序',
+                input_price_per_million DECIMAL(18,6) DEFAULT NULL,
+                output_price_per_million DECIMAL(18,6) DEFAULT NULL,
+                created_by BIGINT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                INDEX idx_ai_profile_enabled (enabled),
+                INDEX idx_ai_profile_default (is_global_default)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='AI连接配置';
+        """,
+
+        # 12.2 AI建议模式：账号覆盖设置
+        "xy_ai_suggestion_account_settings": """
+            CREATE TABLE IF NOT EXISTS xy_ai_suggestion_account_settings (
+                id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                owner_id BIGINT NOT NULL,
+                account_id VARCHAR(80) NOT NULL,
+                mode VARCHAR(20) NOT NULL DEFAULT 'manual',
+                profile_id BIGINT DEFAULT NULL,
+                review_delay_ms INT NOT NULL DEFAULT 4000,
+                inherit_review_delay TINYINT(1) NOT NULL DEFAULT 1,
+                reply_style JSON DEFAULT NULL,
+                inherit_reply_style TINYINT(1) NOT NULL DEFAULT 1,
+                custom_prompt TEXT DEFAULT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                UNIQUE KEY uk_ai_suggestion_owner_account (owner_id, account_id),
+                INDEX idx_ai_suggestion_account_profile (profile_id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='AI建议账号设置';
+        """,
+
+        # 12.3 AI建议模式：经人工批准的AI可见消息
+        "xy_ai_visible_messages": """
+            CREATE TABLE IF NOT EXISTS xy_ai_visible_messages (
+                id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                owner_id BIGINT NOT NULL,
+                account_id VARCHAR(80) NOT NULL,
+                conversation_id VARCHAR(128) NOT NULL,
+                group_id VARCHAR(64) NOT NULL,
+                source_message_id VARCHAR(160) DEFAULT NULL,
+                sequence_no BIGINT NOT NULL,
+                role VARCHAR(20) NOT NULL,
+                content TEXT DEFAULT NULL,
+                approval_status VARCHAR(20) NOT NULL DEFAULT 'approved',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE KEY uk_ai_visible_sequence (owner_id, account_id, conversation_id, sequence_no),
+                INDEX idx_ai_visible_conversation (owner_id, account_id, conversation_id, sequence_no),
+                INDEX idx_ai_visible_group (group_id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='AI可见消息';
+        """,
+
+        # 12.4 AI建议模式：建议与用量记录
+        "xy_ai_suggestion_records": """
+            CREATE TABLE IF NOT EXISTS xy_ai_suggestion_records (
+                id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                owner_id BIGINT NOT NULL,
+                account_id VARCHAR(80) NOT NULL,
+                conversation_id VARCHAR(128) NOT NULL,
+                group_id VARCHAR(64) NOT NULL,
+                profile_id BIGINT DEFAULT NULL,
+                provider_type VARCHAR(32) DEFAULT NULL,
+                model_name VARCHAR(160) DEFAULT NULL,
+                approved_input JSON DEFAULT NULL,
+                business_context JSON DEFAULT NULL,
+                suggestion_original TEXT DEFAULT NULL,
+                suggestion_final TEXT DEFAULT NULL,
+                status VARCHAR(24) NOT NULL DEFAULT 'generated',
+                prompt_tokens INT DEFAULT NULL,
+                completion_tokens INT DEFAULT NULL,
+                total_tokens INT DEFAULT NULL,
+                latency_ms INT DEFAULT NULL,
+                estimated_cost DECIMAL(18,8) DEFAULT NULL,
+                error_code VARCHAR(80) DEFAULT NULL,
+                error_message VARCHAR(500) DEFAULT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                INDEX idx_ai_suggestion_record_owner_time (owner_id, created_at),
+                INDEX idx_ai_suggestion_record_account (account_id, conversation_id),
+                INDEX idx_ai_suggestion_record_status (status)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='AI建议记录';
         """,
 
         # 14. 风控日志表
@@ -1722,6 +1817,7 @@ class DatabaseInitializer:
             ("call_user", "VARCHAR(128) DEFAULT NULL COMMENT '调用用户：仅远程调用记录(按秘钥查到的用户名)'", "call_type"),
         ],
         "xy_accounts": [
+            ("captcha_manual_mode", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '人工滑块验证模式：仅打开可见浏览器，由用户手动完成官方验证'", "show_browser"),
             ("proxy_type", "VARCHAR(20) DEFAULT 'none' COMMENT '代理类型'", "last_refresh_at"),
             ("proxy_host", "VARCHAR(255) COMMENT '代理主机'", "proxy_type"),
             ("proxy_port", "INT COMMENT '代理端口'", "proxy_host"),

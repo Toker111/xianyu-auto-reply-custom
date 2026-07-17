@@ -49,6 +49,7 @@ export interface Conversation {
   otherUserId: string
   otherUserName: string
   otherUserAvatar: string
+  itemId: string
   itemTitle: string
   lastMessageSummary: string
   lastMessageTime: number

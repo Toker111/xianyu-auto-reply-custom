@@ -216,6 +216,7 @@ async def list_cookie_details(
                 username=account.username or "",
                 login_password=account.login_password or "",
                 show_browser=bool(account.show_browser),
+                captcha_manual_mode=bool(account.captcha_manual_mode),
                 disable_reason=account.disable_reason or "",
                 filter_count=filter_counts.get(account.account_id, 0),
             )
@@ -360,6 +361,7 @@ async def list_cookie_details_paginated(
             "username": account.username or "",
             "login_password": account.login_password or "",
             "show_browser": bool(account.show_browser),
+            "captcha_manual_mode": bool(account.captcha_manual_mode),
             "disable_reason": account.disable_reason or "",
             "filter_count": filter_counts.get(account.account_id, 0),
             "today_reply_count": today_reply_counts.get(account.account_id, 0),
@@ -730,13 +732,14 @@ async def update_account_login_info(
     current_user: User = Depends(deps.get_current_active_user),
     account_service: AccountService = Depends(deps.get_account_service),
 ) -> ApiResponse:
-    """更新账号登录信息（用户名、密码、是否显示浏览器）"""
+    """更新账号登录信息、浏览器显示方式和人工验证模式。"""
     account = await _get_account_or_404(current_user, account_id, account_service)
     await account_service.update_login_info(
         account,
         username=payload.username,
         login_password=payload.login_password,
         show_browser=payload.show_browser,
+        captcha_manual_mode=payload.captcha_manual_mode,
     )
     return ApiResponse(success=True, message="登录信息已更新")
 

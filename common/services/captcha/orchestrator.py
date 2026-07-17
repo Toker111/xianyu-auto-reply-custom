@@ -156,6 +156,7 @@ def run_slider_verification_with_fallback(
     url_provider: Optional[Callable[[], Optional[str]]] = None,
     remote_config: Optional[dict] = None,
     weight_class: str = "local",
+    manual_mode: bool = False,
 ) -> Tuple[bool, Optional[Dict[str, str]], Optional[str]]:
     """主引擎 + DrissionPage 兜底的滑块验证编排。
 
@@ -172,11 +173,33 @@ def run_slider_verification_with_fallback(
             供其在链接过期时重取新链接继续处理。
         weight_class: 排队来源类别（"local"=本地Token刷新 / "remote"=远程过滑块接口），
             仅 real_mouse 引擎排队时按权重放行使用；默认 "local"。
+        manual_mode: 账号级纯人工验证开关。开启时禁用远程、真实鼠标、自动 Playwright
+            和 DrissionPage，只打开可见浏览器等待用户亲自完成官方验证。
 
     Returns:
         (是否成功, cookies 字典 | None, 通过引擎 | None)
-        通过引擎取值：'playwright'（主引擎）/ 'drissionpage'（兜底引擎）/ 'real_mouse'（真实鼠标）/ 'remote'（远程接口）/ None（未成功）
+        通过引擎取值：'manual'（人工）/ 'playwright'（主引擎）/ 'drissionpage'（兜底引擎）/ 'real_mouse'（真实鼠标）/ 'remote'（远程接口）/ None（未成功）
     """
+    # 账号级人工模式优先级最高。该模式的目的就是让用户亲自完成官方验证，
+    # 因此不能先尝试任何自动、远程或兜底求解器。
+    if manual_mode:
+        manual_timeout = max(60, min(int(browser_timeout or 180), 300))
+        logger.info(f"【{user_id}】启用账号级人工滑块验证模式，禁用全部自动求解器")
+        ok, cookies = run_slider_verification(
+            user_id,
+            url,
+            enable_learning=False,
+            headless=False,
+            browser_timeout=manual_timeout,
+            url_provider=url_provider,
+            manual_mode=True,
+        )
+        if ok and _has_x5sec(cookies):
+            return True, cookies, "manual"
+        if cookies == URL_EXPIRED:
+            return False, None, "url_expired"
+        return False, None, "manual"
+
     # -1. 远程过滑块（可选，由全局配置 remote_config 触发）：
     #     已配置则优先调远程接口求解；超时/网络不可用 → 回退本机逻辑；
     #     非超时（远程有返回，无论成败）→ 直接采用远程结果，不回退。

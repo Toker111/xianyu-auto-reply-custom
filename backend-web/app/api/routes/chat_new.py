@@ -659,6 +659,15 @@ def _parse_conversation(conv: dict, myid: str) -> dict | None:
             except (json.JSONDecodeError, TypeError):
                 ext = {}
         item_title = ext.get("itemTitle", "") if isinstance(ext, dict) else ""
+        item_id = ""
+        if isinstance(ext, dict):
+            # 不同版本的 IM 扩展字段命名略有差异，统一为前端使用的 itemId。
+            item_id = str(
+                ext.get("itemId")
+                or ext.get("item_id")
+                or ext.get("itemID")
+                or ""
+            ).strip()
 
         # 最后一条消息
         last_msg_obj = conv.get("lastMessage", {})
@@ -680,6 +689,16 @@ def _parse_conversation(conv: dict, myid: str) -> dict | None:
         sender_user_id_raw = last_ext.get("senderUserId", "") if isinstance(last_ext, dict) else ""
         sender_user_id = str(sender_user_id_raw).split("@")[0] if "@" in str(sender_user_id_raw) else str(sender_user_id_raw)
         reminder_title = last_ext.get("reminderTitle", "") if isinstance(last_ext, dict) else ""
+        if isinstance(last_ext, dict):
+            if not item_id:
+                item_id = str(
+                    last_ext.get("itemId")
+                    or last_ext.get("item_id")
+                    or last_ext.get("itemID")
+                    or ""
+                ).strip()
+            if not item_title:
+                item_title = str(last_ext.get("itemTitle") or "").strip()
         # 只有当最后一条消息的发送者是对方时，reminderTitle 才是对方名称
         # 用 other_user_id 比较比 myid 更可靠（避免格式不一致）
         # 昵称必须是有效的（非空、非纯数字），否则视为未获取到
@@ -694,6 +713,7 @@ def _parse_conversation(conv: dict, myid: str) -> dict | None:
             "otherUserId": other_user_id,
             "otherUserName": other_user_name,
             "otherUserAvatar": "",
+            "itemId": item_id,
             "itemTitle": item_title,
             "lastMessageSummary": last_msg_summary,
             "lastMessageTime": last_msg_time,

@@ -207,6 +207,7 @@ class AccountImportService:
                 existing.pause_duration = _parse_int(row.get("暂停时长(秒)"), existing.pause_duration)
                 existing.message_expire_time = _parse_int(row.get("相同消息等待时间(秒)"), existing.message_expire_time)
                 existing.show_browser = _parse_bool(row.get("显示浏览器"))
+                existing.captcha_manual_mode = _parse_bool(row.get("人工滑块验证模式"))
                 existing.proxy_type = _parse_str(row.get("代理类型")) or existing.proxy_type
                 existing.proxy_host = _parse_str(row.get("代理地址")) or existing.proxy_host
                 existing.proxy_port = _parse_int(row.get("代理端口"), existing.proxy_port or 0) or None
@@ -238,6 +239,7 @@ class AccountImportService:
                     pause_duration=_parse_int(row.get("暂停时长(秒)"), 10),
                     message_expire_time=_parse_int(row.get("相同消息等待时间(秒)"), 3600),
                     show_browser=_parse_bool(row.get("显示浏览器")),
+                    captcha_manual_mode=_parse_bool(row.get("人工滑块验证模式")),
                     proxy_type=_parse_str(row.get("代理类型")) or "none",
                     proxy_host=_parse_str(row.get("代理地址")) or None,
                     proxy_port=_parse_int(row.get("代理端口"), 0) or None,

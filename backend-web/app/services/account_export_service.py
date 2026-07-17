@@ -220,7 +220,7 @@ class AccountExportService:
     def _write_account_basic(self, wb: Workbook, accounts: list[XYAccount]) -> None:
         headers = [
             "账号ID", "备注", "用户名", "登录密码", "Cookie", "状态", "禁用原因",
-            "暂停时长(秒)", "相同消息等待时间(秒)", "显示浏览器",
+            "暂停时长(秒)", "相同消息等待时间(秒)", "显示浏览器", "人工滑块验证模式",
             "代理类型", "代理地址", "代理端口", "代理用户名", "代理密码",
         ]
         rows = []
@@ -228,7 +228,7 @@ class AccountExportService:
             rows.append([
                 acc.account_id, acc.remark, acc.username, acc.login_password,
                 acc.cookie, acc.status, acc.disable_reason,
-                acc.pause_duration, acc.message_expire_time, acc.show_browser,
+                acc.pause_duration, acc.message_expire_time, acc.show_browser, acc.captcha_manual_mode,
                 acc.proxy_type, acc.proxy_host, acc.proxy_port, acc.proxy_user, acc.proxy_pass,
             ])
         _write_sheet(wb, "账号基本信息", headers, rows)
