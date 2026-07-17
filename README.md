@@ -6,6 +6,9 @@
 
 > 本仓库不是上游项目的官方版本。上游功能、部署方式和平台接口可能继续变化，本版本的定制功能以当前仓库代码和本文档为准。
 
+<img width="326" height="418" alt="image" src="https://github.com/user-attachments/assets/320a82a3-939d-4ab5-b5e3-ec8a9afe3f10" />
+
+
 ## 当前版本重点
 
 ### 1. 三种回复模式
